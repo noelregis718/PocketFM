@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+@theme {
+  --color-border: rgba(39, 39, 42, 0.8);
+  --color-background: #09090b;
+  --color-foreground: #fafafa;
+  
+  --color-primary: #38bdf8;
+  --color-primary-foreground: #000000;
+  
+  --color-secondary: #18181b;
+  --color-secondary-foreground: #f8fafc;
+  
+  --color-accent: #38bdf8;
+  --color-accent-foreground: #000000;
+  
+  --color-card: rgba(24, 24, 27, 0.4);
+  --color-card-foreground: #fafafa;
+  
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+}
+
+.terminal-body::-webkit-scrollbar {
+  width: 6px;
+}
+.terminal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.terminal-body::-webkit-scrollbar-thumb {
+  background-color: #444444;
+  border-radius: 3px;
+}
+
+/* Glass effect helpers */
+.glass-panel {
+  @apply bg-card border border-border backdrop-blur-xl shadow-2xl;
+}
