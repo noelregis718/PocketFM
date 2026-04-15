@@ -88,27 +88,13 @@ function App() {
             isLoading={loading}
             placeholder="Paste Amazon Bestseller URL (e.g., https://www.amazon.com/zgbs/books/)"
           />
-          <div className="flex justify-center mt-3 gap-4 text-xs text-muted-foreground">
-              <div className="flex items-center gap-2">
-                <span>Concurrent Tabs:</span>
-                <span className="text-primary font-mono">15</span>
-              </div>
-              <div className="flex items-center gap-2 border-l border-border pl-4">
-                <span>Row Limit:</span>
-                <input 
-                  type="number" 
-                  value={limit} 
-                  onChange={(e) => setLimit(parseInt(e.target.value))}
-                  className="bg-transparent border border-white/10 rounded px-1 w-12 text-primary focus:outline-none"
-                />
-              </div>
-          </div>
         </div>
+
 
         {/* Console / Logs */}
         {logs.length > 0 && (
           <div className="w-full max-w-3xl glass-panel rounded-2xl overflow-hidden mb-8 border-white/5 bg-black/60 shadow-inner">
-            <div className="bg-white/5 px-4 py-2 border-bottom border-border flex items-center gap-2 text-[10px] text-muted-foreground font-mono uppercase tracking-widest">
+            <div className="bg-white/5 px-4 py-2 border-bottom border-border flex items-center gap-2 text-[14px] text-muted-foreground font-sans">
               <Terminal className="w-3 h-3" />
               <span>System Execution Logs</span>
             </div>
