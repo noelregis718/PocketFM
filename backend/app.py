@@ -105,7 +105,7 @@ async def run_scrape_process(url, limit):
 
                     # MAPPING TO 33-COLUMN SCHEMA
                     mapped = {
-                        "Sub_Genre":                 "N/A",
+                        "Sub_Genre":                 gr_data.get('Sub_Genre', details.get('Sub_Genre_Candidate', 'N/A')),
                         "Price_Tier":                details.get('Price', book.get('Price', 'N/A')),
                         "Amazon URL":                details.get('Amazon URL', book.get('Amazon URL', 'N/A')),
                         "Book Title":                book.get('Book Title', 'N/A'),
@@ -115,7 +115,7 @@ async def run_scrape_process(url, limit):
                         "Amazon Stars":              book.get('Rating', 0),
                         "Amazon Ratings":            book.get('Number of Reviews', 0),
                         "Number of Books in Series": details.get('Total Books', 'N/A'),
-                        "Genre":                     "N/A",
+                        "Genre":                     gr_data.get('Genre', 'N/A'),
                         "Publisher":                 details.get('Publisher', 'N/A'),
                         "Publication Date":          details.get('Publication Date', 'N/A'),
                         "Print Length / Pages":      details.get('Pages', 'N/A'),
@@ -130,7 +130,7 @@ async def run_scrape_process(url, limit):
                         "Book1_Num_Ratings":         gr_data.get('Book1_Num_Ratings', 'N/A'),
                         "Logline":                   details.get('Description', 'N/A'),
                         "One_Sentence_Logline":      (details.get('Description', '').split('.')[0] + '.') if details.get('Description') else 'N/A',
-                        "Romantasy_Subgenre":        "N/A",
+                        "Romantasy_Subgenre":        gr_data.get('Romantasy_Subgenre', 'N/A'),
                         "Author_Email":              ath.get('Author_Email', 'N/A'),
                         "Agent_Email":               ath.get('Agent_Email', 'N/A'),
                         "Facebook":                  ath.get('Facebook', 'N/A'),

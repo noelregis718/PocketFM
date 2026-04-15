@@ -816,15 +816,56 @@ class GoodreadsScraper:
                 except Exception:
                     pass
 
+            # --- TIER 5: Broadened Discovery (Normalized Title) ---
+            if not book_url:
+                clean_q = normalize_title_for_search(title)
+                print(f"  Goodreads: Discovery Tier 5 (Broad) for: '{clean_q}'")
+                search_query = f"{clean_q} {author} genre subgenre goodreads"
+                brave_url = f"https://search.brave.com/search?q={search_query.replace(' ', '+')}"
+                try:
+                    await page.goto(brave_url, wait_until="domcontentloaded", timeout=30000)
+                    links = await page.query_selector_all('a[href*="goodreads.com/book/show/"]')
+                    for link in links:
+                        link_text = (await link.inner_text()).lower()
+                        href = await link.evaluate("el => el.href")
+                        if any(x in link_text for x in ['summary', 'analysis', 'study guide', 'workbook']):
+                            continue
+                        book_url = href
+                        print(f"  Goodreads: Found via Broad Search: {book_url}")
+                        break
+                except Exception:
+                    pass
+
             if not book_url:
                 print(f"  Goodreads: No results found for '{title[:20]}'")
                 return {}
             
-            # Step 2: Final navigation to book page if not already there
+            # Step 2: Final navigation to book page
             if page.url != book_url:
                 await page.goto(book_url, wait_until="domcontentloaded", timeout=60000)
             
-            await asyncio.sleep(2) # Wait for React hydration
+            await asyncio.sleep(4) # Extended wait for React hydration of genres
+
+            # Extract Genres
+            genres = []
+            try:
+                # Primary selector for new layout
+                genre_els = await page.query_selector_all('[data-testid="genresList"] .Button__labelItem, .BookPageMetadataSection__genre a')
+                if not genre_els:
+                    # Fallback to general link scan
+                    genre_els = await page.query_selector_all('a[href*="/genres/"]')
+                
+                for gel in genre_els:
+                    txt = clean_text(await gel.inner_text())
+                    if txt and txt not in genres and len(txt) < 30:
+                        genres.append(txt)
+            except Exception:
+                pass
+            
+            # Specific Romantasy Check
+            is_romantasy = "Yes" if any("romantasy" in g.lower() for g in genres) else "No"
+            genre_main = genres[0] if genres else "N/A"
+            genre_sub = genres[1] if len(genres) > 1 else "N/A"
 
             # Step 2: Extract Book Details (Ratings, Series URL)
             # Try JSON-LD first (most stable)
@@ -920,6 +961,9 @@ class GoodreadsScraper:
                 "GoodReads_Series_URL": series_url,
                 "GoodReads_Rating": avg_rating,
                 "GoodReads_Rating_Count": rating_count,
+                "Genre": genre_main,
+                "Sub_Genre": genre_sub,
+                "Romantasy_Subgenre": is_romantasy,
                 **series_data
             }
         except Exception as e:
