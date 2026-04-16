@@ -44,13 +44,19 @@ def normalize_title_for_search(title):
         r'\(.*book\s+\d+.*\)', # Remove (Series Name Book 1)
         r'\(.*series.*\)',
         r'\[.*\]', # Remove [Brackets]
+        r'book\s+\d+.*', # Remove standalone Book 1
+        r'\d+\s+of\s+\d+.*', # Remove 1 of 3
+        r'a\s+dark\s+fantasy.*', # Remove genre tags
+        r'an\s+addictive\s+fantasy.*',
     ]
     
     for pattern in remove_patterns:
-        t = re.sub(pattern, '', t)
+        t = re.sub(pattern, '', t, flags=re.IGNORECASE)
     
-    # Clean up punctuation and extra spaces
-    t = re.sub(r'[:\-—].*', '', t) # Take only part before first colon/dash for broad search
+    # Take only part before first colon/dash for broad search
+    t = re.split(r'[:\-—\(]', t)[0]
+    
+    # Clean up punctuation
     t = re.sub(r'[^\w\s]', '', t)
     return t.strip()
 
@@ -868,7 +874,7 @@ class GoodreadsScraper:
             genre_sub = genres[1] if len(genres) > 1 else "N/A"
 
             # Step 2: Extract Book Details (Ratings, Series URL)
-            # Try JSON-LD first (most stable)
+            # Tier 1: JSON-LD (most stable if present)
             ld_json = {}
             try:
                 ld_element = await page.query_selector('script[type="application/ld+json"]')
@@ -881,28 +887,116 @@ class GoodreadsScraper:
             avg_rating = ld_json.get('aggregateRating', {}).get('ratingValue', "N/A")
             rating_count = ld_json.get('aggregateRating', {}).get('ratingCount', "N/A")
 
-            # Series link
+            # Tier 2: DOM Selectors (Fallback if JSON-LD missing or partial)
+            if avg_rating == "N/A" or rating_count == "N/A":
+                try:
+                    # Wait for the rating block to hydrate (Top of Page)
+                    try:
+                        await page.wait_for_selector('.RatingStatistics__rating, [data-testid="ratingValue"]', timeout=7000)
+                    except: pass
+
+                    rating_selectors = [
+                        '[data-testid="ratingValue"]',
+                        '.RatingStatistics__rating',
+                        '.RatingStars__rating',
+                        '[itemprop="ratingValue"]',
+                        '.RatingStatistics__ratingValue'
+                    ]
+                    for r_sel in rating_selectors:
+                        r_el = await page.query_selector(r_sel)
+                        if r_el:
+                            avg_rating = clean_text(await r_el.inner_text())
+                            if avg_rating and re.search(r'\d', avg_rating): break
+                    
+                    count_selectors = [
+                        '[data-testid="ratingsCount"]',
+                        '.RatingStatistics__ratingCount',
+                        'a[href="#CommunityReviews"]',
+                        '[itemprop="ratingCount"]'
+                    ]
+                    for c_sel in count_selectors:
+                        count_el = await page.query_selector(c_sel)
+                        if count_el:
+                            c_text = await count_el.inner_text()
+                            # Improved regex: Look for numbers preceding "ratings" or just the first group of numbers
+                            m = re.search(r'([\d,]+)(?=\s*ratings?)', c_text, re.IGNORECASE)
+                            if not m:
+                                m = re.search(r'([\d,]+)', c_text)
+                            
+                            if m:
+                                rating_count = m.group(1).replace(',', '')
+                                break
+                except Exception:
+                    pass
+
+            # Tier 3: Regex Body Scan (Last resort)
+            if avg_rating == "N/A":
+                content = await page.content()
+                match = re.search(r'([\d.]+)\s+avg\s+rating', content, re.IGNORECASE)
+                if match:
+                    avg_rating = match.group(1)
+
+            # Extract Page Count from the book page (Standalone fallback)
+            book_pages = "N/A"
+            try:
+                page_el = await page.query_selector('[data-testid="pagesFormat"]')
+                if page_el:
+                    page_text = await page_el.inner_text()
+                    m = re.search(r'(\d+)\s+pages', page_text)
+                    if m:
+                        book_pages = m.group(1)
+            except Exception:
+                pass
+
+            # Series link - INTELLIGENCE LAYER (Selector Carousel)
             series_url = "N/A"
             series_name = "N/A"
-            # Look for link in title header or near book description
-            series_el = await page.query_selector('h3.Text__title3 a[href*="/series/"], [data-testid="bookTitle"] + .Text + a[href*="/series/"]')
-            if not series_el or str(series_el) == "JSHandle@undefined":
-                # Fallback JS scan
-                series_el = await page.evaluate_handle("""() => {
+            
+            selectors = [
+                'h3.Text__title3 a[href*="/series/"]', 
+                '[data-testid="bookTitle"] + .Text + a[href*="/series/"]',
+                '.BookPageMetadataSection__title + .Text a[href*="/series/"]',
+                'a.SeriesLink',
+                '[data-testid="series"] a'
+            ]
+            
+            for sel in selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el:
+                        is_anchor = await el.evaluate("el => el instanceof HTMLAnchorElement")
+                        if is_anchor:
+                            series_url = await el.evaluate("el => el.href")
+                            series_name = clean_text(await el.inner_text())
+                            print(f"    Intelligence: Found series via selector '{sel}'")
+                            break
+                except Exception:
+                    continue
+
+            # Fallback JS scan (Deep Scan)
+            if series_url == "N/A":
+                print("    Intelligence: Falling back to Deep JS Scan for series...")
+                series_data = await page.evaluate("""() => {
                     const links = Array.from(document.querySelectorAll('a[href*="/series/"]'));
-                    return links.find(l => {
-                        const txt = l.innerText.toLowerCase();
-                        const pTxt = l.parentElement ? l.parentElement.innerText.toLowerCase() : "";
-                        return txt.includes('series') || pTxt.includes('series');
-                    }) || null;
+                    if (links.length > 0) {
+                        return { url: links[0].href, name: links[0].innerText.trim() };
+                    }
+                    // Try to find the word 'Series' and look for a link near it
+                    const spans = Array.from(document.querySelectorAll('span, div, b'));
+                    for (const s of spans) {
+                        if (s.innerText && s.innerText.toLowerCase().includes('series')) {
+                            const link = s.querySelector('a') || (s.parentElement ? s.parentElement.querySelector('a') : null);
+                            if (link && link.href.includes('/series/')) {
+                                return { url: link.href, name: link.innerText.trim() };
+                            }
+                        }
+                    }
+                    return null;
                 }""")
-            
-            # Re-check handle
-            is_valid = await series_el.evaluate("el => el instanceof HTMLAnchorElement") if series_el else False
-            
-            if is_valid:
-                series_url = await series_el.evaluate("el => el.href")
-                series_name = clean_text(await series_el.inner_text())
+                if series_data:
+                    series_url = series_data['url']
+                    series_name = clean_text(series_data['name'])
+                    print(f"    Intelligence: Found series via Deep JS Scan")
 
             # Step 3: If Series URL exists, visit it
             series_data = {
@@ -957,14 +1051,28 @@ class GoodreadsScraper:
                 except Exception as se:
                     print(f"  Goodreads: Series page error: {se}")
 
+            # Final return merge
+            final_book1_rating = series_data.get("Book1_Rating", "N/A")
+            final_book1_count = series_data.get("Book1_Num_Ratings", "N/A")
+            
+            # If Series Page found N/A for Book 1, fallback to the Book Page we are currently on
+            if final_book1_rating == "N/A" or not re.search(r'\d', str(final_book1_rating)):
+                final_book1_rating = avg_rating
+            if final_book1_count == "N/A" or not re.search(r'\d', str(final_book1_count)):
+                final_book1_count = rating_count
+
             return {
                 "GoodReads_Series_URL": series_url,
+                "GoodReads_Book_URL": page.url, # ALWAYS return the current book URL
                 "GoodReads_Rating": avg_rating,
                 "GoodReads_Rating_Count": rating_count,
                 "Genre": genre_main,
                 "Sub_Genre": genre_sub,
                 "Romantasy_Subgenre": is_romantasy,
-                **series_data
+                "Num_Primary_Books": series_data["Num_Primary_Books"] if series_url != "N/A" else "1",
+                "Total_Pages_Primary_Books": series_data["Total_Pages_Primary_Books"] if (series_url != "N/A" and series_data["Total_Pages_Primary_Books"] != 0) else book_pages,
+                "Book1_Rating": final_book1_rating,
+                "Book1_Num_Ratings": final_book1_count
             }
         except Exception as e:
             print(f"  Goodreads: Error for '{title[:20]}': {e}")

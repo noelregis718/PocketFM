@@ -1,9 +1,14 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import asyncio
+import sys
+import os
+
+# Ensure the current directory is in the path for module imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from scraper import AmazonScraper, GoodreadsScraper, AuthorScraper
 from excel_utility import save_to_excel
-import os
 from playwright.async_api import async_playwright
 
 app = Flask(__name__)
@@ -64,7 +69,7 @@ async def run_scrape_process(url, limit):
 
         goodreads_scraper = GoodreadsScraper(headless=False)
         author_scraper = AuthorScraper(headless=False)
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(20) # Turbo Speed Upgrade
         
         # Cache to avoid redundant searches for the same author in a single run
         author_cache = {}
@@ -149,8 +154,23 @@ async def run_scrape_process(url, limit):
         
         tasks = [limited_tab_scrape(book) for book in book_list]
         final_results = await asyncio.gather(*tasks)
+
+        # PART 3: AUTOMATED DEEP SWEEP (PHASE 2)
+        print("\n" + "="*40)
+        print("PHASE 1 COMPLETE: STARTING PHASE 2 DEEP SWEEP")
+        print("="*40)
+        
+        import pandas as pd
+        from repair_goodreads import perform_deep_repair
+        
+        df_results = pd.DataFrame(final_results)
+        df_final = await perform_deep_repair(df_results, context)
+        
+        # We return the perfected dict list
+        final_perfected = df_final.to_dict('records')
+        
         await browser.close()
-        return final_results
+        return final_perfected
 
 @app.route('/api/scrape-bestsellers', methods=['POST'])
 def scrape():
