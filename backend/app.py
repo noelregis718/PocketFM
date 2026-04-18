@@ -1,12 +1,17 @@
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+import asyncio
 import sys
 import os
 
 # Ensure the current directory is in the path for module imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
-import asyncio
+# Emoji-Shield: Force UTF-8 for Windows Console to prevent crashes on special characters
+try:
+    if sys.stdout.encoding.lower() != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+except AttributeError: pass
 
 from scraper import AmazonScraper, GoodreadsScraper, AuthorScraper
 from excel_utility import save_to_excel
@@ -18,8 +23,20 @@ CORS(app)
 scraper = AmazonScraper(headless=False)
 
 async def run_scrape_process(url, limit):
-    # Part 1: List extraction
-    book_list = await scraper.scrape_bestseller_list(url, limit)
+    # Industrial Stepper: Check current progress in Excel
+    skip_offset = 0
+    excel_path = "scraped_data.xlsx"
+    if os.path.exists(excel_path):
+        try:
+            import pandas as pd
+            df_existing = pd.read_excel(excel_path)
+            skip_offset = len(df_existing)
+            print(f"  [Stepper] Detected {skip_offset} existing books. Resuming at #{skip_offset + 1}...")
+        except Exception as e:
+            print(f"  [Warning] Could not read existing Excel: {e}")
+
+    # Part 1: List extraction (Requesting exactly 50 books for the 'Step')
+    book_list = await scraper.scrape_bestseller_list(url, limit=limit, skip_offset=skip_offset)
 
     if not book_list:
         return []
@@ -192,7 +209,7 @@ async def run_scrape_process(url, limit):
 def scrape():
     data = request.json
     url = data.get('url')
-    limit = data.get('limit', 50)
+    limit = data.get('limit', 1000)
 
     if not url:
         return jsonify({"error": "URL is required"}), 400

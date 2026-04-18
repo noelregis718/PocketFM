@@ -65,174 +65,254 @@ class AmazonScraper:
     def __init__(self, headless=False):
         self.headless = headless
 
-    async def scrape_bestseller_list(self, url, limit=10):
+    async def set_amazon_location(self, page, zip_code="90016"):
+        """Automates setting the Amazon delivery location to a US zip code (ensures USD)."""
+        print(f"  [Location] Setting Amazon location to US Zip: {zip_code}...")
+        try:
+            # 1. Click the "Deliver to" button
+            loc_button = await page.query_selector('#nav-global-location-popover-link, #nav-packard-glow-loc-icon')
+            if loc_button:
+                await loc_button.click()
+                await asyncio.sleep(2)
+                
+                # 2. Enter Zip Code if input is visible
+                zip_input = await page.query_selector('#GLUXZipUpdateInput')
+                if zip_input:
+                    await zip_input.fill(zip_code)
+                    await asyncio.sleep(1)
+                    
+                    # 3. Click Apply
+                    apply_btn = await page.query_selector('#GLUXZipUpdate .a-button-input, #GLUXZipUpdate input')
+                    if apply_btn:
+                        await apply_btn.click()
+                        await asyncio.sleep(2)
+                
+                # 4. Check for "Continue" or "Done" button in the popover
+                # Often after apply, a "Continue" button appears
+                continue_btn = await page.query_selector('span[id="GLUXConfirmClose"] input, [name="glowDoneButton"]')
+                if continue_btn and await continue_btn.is_visible():
+                    await continue_btn.click()
+                    await asyncio.sleep(2)
+                else:
+                    # Alternative: just refresh if apply was successful
+                    await page.reload(wait_until="domcontentloaded")
+                
+                print(f"  [Location] Done. Verified location: {zip_code}")
+            else:
+                print("  [Location] Warning: Could not find location button.")
+        except Exception as e:
+            print(f"  [Location] Error setting location: {e}")
+
+    async def scrape_bestseller_list(self, url, limit=10, skip_offset=0, external_page=None):
+        if external_page:
+            # UNIFIED SESSION MODE: Use the page provided by the caller
+            return await self._execute_discovery(external_page, url, limit, skip_offset)
+            
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=self.headless)
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
             page = await context.new_page()
-
             try:
-                # 'load' waits for full page including any redirect chains
-                print(f"Opening Amazon: {url}")
-                await page.goto(url, wait_until="load", timeout=60000)
-
-                # --- AMAZON LOGIN GATE ---
-                print("\n" + "!" * 60)
-                print("  ACTION REQUIRED: MANUALLY CLEAR AMAZON BLOCKS")
-                print("  1. Solve any CAPTCHAs if they appear.")
-                print("  2. Ensure you are on the correct Bestseller page.")
-                print("  The automation will begin once the search bar is visible.")
-                print("!" * 60 + "\n")
-
-                try:
-                    # Wait for Search bar or Logo as proof of page loading
-                    await page.wait_for_selector('#twotabsearchtextbox, #nav-logo-sprites', timeout=300000)
-                    print("  [OK] Amazon page confirmed. Starting Deep Scan...")
-                except Exception:
-                    print("  [Time Out] Login wait exceeded. Attempting to proceed...")
-
-                unique_results = []
-                seen_asin = set()
-                page_num = 1
-
-                while len(unique_results) < limit:
-                    print(f"\nScanning Amazon Page {page_num} (Total gathered: {len(unique_results)})...")
-                    
-                    # Scroll to trigger lazy-loading
-                    try:
-                        await page.evaluate("""async () => {
-                            await new Promise((resolve) => {
-                                let totalHeight = 0;
-                                let distance = 100;
-                                let timer = setInterval(() => {
-                                    let scrollHeight = document.body.scrollHeight;
-                                    window.scrollBy(0, distance);
-                                    totalHeight += distance;
-                                    if (totalHeight >= scrollHeight) {
-                                        clearInterval(timer);
-                                        resolve();
-                                    }
-                                }, 100);
-                            });
-                        }""")
-                        await asyncio.sleep(1)
-                    except Exception as scroll_err:
-                        print(f"Scroll skipped: {scroll_err}")
-
-                    try:
-                        await page.wait_for_load_state("networkidle", timeout=8000)
-                    except Exception:
-                        pass
-
-                    # --- Item selection ---
-                    items = await page.query_selector_all('[data-asin]')
-                    
-                    for item in items:
-                        asin = await item.get_attribute('data-asin')
-                        if not asin or asin in seen_asin or asin == "N/A":
-                            continue
-                        
-                        # --- Title Extraction ---
-                        title_el = await item.query_selector('.p13n-sc-untruncated-desktop-title, ._cDE_gridItem_truncate-title')
-                        raw_title = ""
-                        if title_el:
-                            raw_title = clean_text(await title_el.inner_text())
-                        
-                        if not raw_title:
-                            img_el = await item.query_selector('img')
-                            if img_el:
-                                alt_val = await img_el.get_attribute('alt')
-                                if alt_val and len(alt_val) > 3:
-                                    raw_title = clean_text(alt_val)
-
-                        if not raw_title or "formats available" in raw_title.lower():
-                            continue
-
-                        # --- Rank Extraction ---
-                        rank_text = "N/A"
-                        for rank_sel in ['.zg-bdg-text', '.p13n-sc-badge-label-size-base', 'span.zg-badge-text']:
-                            el = await item.query_selector(rank_sel)
-                            if el:
-                                t = clean_text(await el.inner_text())
-                                if t and re.search(r'\d', t):
-                                    rank_text = t.lstrip('#').strip()
-                                    break
-
-                        # --- Basic Data ---
-                        rating_el  = await item.query_selector('.a-icon-star-small .a-icon-alt, [class*="star"]')
-                        reviews_el = await item.query_selector('[aria-label*="ratings"], [aria-label*="reviews"]')
-                        link_el    = await item.query_selector('a.a-link-normal[href*="/dp/"], a.a-link-normal')
-
-                        # --- Author Extraction ---
-                        author_name = "N/A"
-                        for author_selector in ['a[href*="/e/"]', 'div.a-row.a-size-small a', '[class*="author"] a']:
-                            try:
-                                el = await item.query_selector(author_selector)
-                                if el:
-                                    text = clean_text(await el.inner_text())
-                                    if text and len(text) > 1 and not re.match(r'^[\d\.\$,]+$', text):
-                                        author_name = text
-                                        break
-                            except: continue
-
-                        # URL Extraction
-                        raw_href = ""
-                        if link_el:
-                            try: raw_href = await link_el.evaluate("el => el.href")
-                            except: raw_href = await link_el.get_attribute('href')
-
-                        amazon_url = raw_href
-                        if asin:
-                            if raw_href and raw_href.startswith('http'):
-                                domain = "/".join(raw_href.split("/", 3)[:3])
-                                amazon_url = f"{domain}/dp/{asin}"
-                            else:
-                                amazon_url = f"/dp/{asin}"
-
-                        # Reviews count
-                        reviews_count = 0
-                        if reviews_el:
-                            aria = await reviews_el.get_attribute('aria-label') or ""
-                            m = re.search(r'stars?,?\s*([\d,]+)\s*ratings?', aria, re.IGNORECASE)
-                            if m: reviews_count = int(m.group(1).replace(',', ''))
-
-                        unique_results.append({
-                            "Rank":              rank_text,
-                            "Book Title":        raw_title,
-                            "Author Name":       author_name,
-                            "Rating":            clean_numeric(await rating_el.inner_text()) if rating_el else 0,
-                            "Number of Reviews": reviews_count,
-                            "Price":             "N/A",
-                            "Amazon URL":        amazon_url
-                        })
-                        seen_asin.add(asin)
-                        
-                        if len(unique_results) >= limit:
-                            break
-
-                    if len(unique_results) >= limit:
-                        break
-
-                    # --- PAGINATION: Next Page ---
-                    next_button = await page.query_selector('li.a-last a')
-                    if next_button:
-                        print("Navigating to Next Page...")
-                        await next_button.click()
-                        page_num += 1
-                        # Wait for next page scan proof
-                        await page.wait_for_selector('[data-asin]', timeout=30000)
-                        await asyncio.sleep(3) # Anti-bot delay
-                    else:
-                        print("No more pages found.")
-                        break
-
-                print(f"Total books gathered: {len(unique_results)}")
-                return unique_results
-
+                return await self._execute_discovery(page, url, limit, skip_offset)
             finally:
                 await browser.close()
+
+    async def _execute_discovery(self, page, url, limit, skip_offset):
+        try:
+            unique_results = []
+            seen_asin = set()
+            # Queue of category URLs to explore
+            category_queue = [url]
+            seen_categories = {url}
+
+            # --- AMAZON LOGIN GATE (Only once at the start) ---
+            print(f"Opening Amazon: {url}")
+            await page.goto(url, wait_until="load", timeout=60000)
+            
+            # --- NEW: Set US Location (90016) ---
+            await self.set_amazon_location(page, "90016")
+
+            print("\n" + "!" * 60)
+            print("  ACTION REQUIRED: MANUALLY CLEAR AMAZON BLOCKS")
+            print("  1. Solve any CAPTCHAs.")
+            print("  2. Navigate to your target START category.")
+            print("  The engine will then auto-dive into sub-categories if needed.")
+            print("!" * 60 + "\n")
+
+            try:
+                await page.wait_for_selector('#twotabsearchtextbox, #nav-logo-sprites, [data-asin]', timeout=300000)
+                print("  [OK] Amazon page detected. Starting Deep Scrape...")
+            except Exception:
+                print("  [Time Out] Wait exceeded. Proceeding with visible content...")
+
+            global_found_count = 0
+            if skip_offset > 0:
+                print(f"  [Resuming] Industrial Stepper: Skipping the first {skip_offset} books (already in Excel)...")
+
+            while len(unique_results) < limit and category_queue:
+                current_cat_url = category_queue.pop(0)
+                print(f"\n" + "-"*30)
+                print(f"[Category Pivot] Exploring: {current_cat_url}")
+                print(f"  (Target: {limit} | Current: {len(unique_results)})")
+                print("-"*30)
+                
+                try:
+                    # Use a 45s timeout for navigation as category switching can be slow
+                    await page.goto(current_cat_url, wait_until="load", timeout=45000)
+                except Exception as e:
+                    print(f"  [Skip] Navigation failed: {e}")
+                    continue
+
+                # --- DETECT LIST TYPE ---
+                # If this is a search result page vs a Bestseller page, pagination differs
+                is_bestseller = "/zgbs/" in current_cat_url or "/best-sellers/" in current_cat_url
+
+                page_num = 1
+                while True:
+                    # --- AGGRESSIVE FAST SCROLL ---
+                    print(f"  [Page {page_num}] Scrolling to reveal all content...")
+                    await page.evaluate("""async () => {
+                        for (let i = 0; i < 5; i++) {
+                            window.scrollBy(0, document.body.scrollHeight / 5);
+                            await new Promise(r => setTimeout(r, 700));
+                        }
+                        window.scrollTo(0, document.body.scrollHeight);
+                    }""")
+                    await asyncio.sleep(2)
+
+                    # --- DISCOVERY SCAN ---
+                    items = await page.query_selector_all('[data-asin]')
+                    page_asins = []
+                    found_on_page = 0
+                    
+                    for item in items:
+                        asin = await item.get_attribute('data-asin') or "N/A"
+                        
+                        # Stepper logic: Increment counter for every book found
+                        global_found_count += 1
+                        if global_found_count <= skip_offset:
+                            if global_found_count % 10 == 0:
+                                print(f"  [Skip] Skipping Rank #{global_found_count}...")
+                            continue
+
+                        if not asin or asin == "N/A" or asin in seen_asin:
+                            continue
+                        
+                        title_el = await item.query_selector('.p13n-sc-untruncated-desktop-title, ._cDE_gridItem_truncate-title, img')
+                        raw_title = "N/A"
+                        if title_el:
+                            tag = await title_el.evaluate("el => el.tagName")
+                            if tag == 'IMG': raw_title = clean_text(await title_el.get_attribute('alt'))
+                            else: raw_title = clean_text(await title_el.inner_text())
+
+                        # Extract Rank (Optional for discovery, but helpful)
+                        rank_el = await item.query_selector('.zg-bdg-text, .p13n-sc-badge-label-size-base, span.zg-badge-text, .s-badge-text')
+                        rank_text = clean_text(await rank_el.inner_text()).lstrip('#').strip() if rank_el else "N/A"
+
+                        link_el = await item.query_selector('a.a-link-normal[href*="/dp/"], a.a-link-normal')
+                        raw_href = await link_el.evaluate("el => el.href") if link_el else ""
+
+                        if not raw_href or "javascript" in raw_href or not raw_title:
+                            continue
+
+                        unique_results.append({
+                            "Rank": rank_text,
+                            "Book Title": raw_title,
+                            "Author Name": "N/A",
+                            "Rating": 0,
+                            "Number of Reviews": 0,
+                            "Price": "N/A",
+                            "Amazon URL": raw_href
+                        })
+                        seen_asin.add(asin)
+                        page_asins.append(asin)
+                        found_on_page += 1
+                        if len(unique_results) >= limit: break
+
+                    print(f"  -> +{found_on_page} unique books. (Progress: {len(unique_results)}/{limit})")
+                    if len(unique_results) >= limit: 
+                        print("  [OK] Limit satisfied!")
+                        break
+
+                    # --- UNIVERSAL PAGINATION ---
+                    next_btn = None
+                    selectors = [
+                        'li.a-last a', 
+                        'a.s-pagination-next', 
+                        '.zg-pagination-next a',
+                        'a:has-text("Next")',
+                        '#p_n_feature_nine_browse-bin-title + ul li a' # Sub-category fallback if pag fails
+                    ]
+                    for sel in selectors:
+                        try:
+                            btn = await page.query_selector(sel)
+                            if btn and await btn.is_visible():
+                                next_btn = btn
+                                break
+                        except: continue
+
+                    if next_btn:
+                        first_asin_before = page_asins[0] if page_asins else None
+                        print(f"  Flipping Page {page_num}...")
+                        await next_btn.click()
+                        page_num += 1
+                        await asyncio.sleep(4) # Industrial safety delay
+                        
+                        # Verify page turn
+                        new_items = await page.query_selector_all('[data-asin]')
+                        if new_items:
+                            current_asin = await new_items[0].get_attribute('data-asin')
+                            if current_asin == first_asin_before:
+                                print("  [Warning] Page turn failed. Retrying click...")
+                                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                                await asyncio.sleep(1)
+                                await next_btn.click()
+                    else:
+                        print(f"  [End of Category] No more pages in this branch.")
+                        break
+
+                    # --- AGGRESSIVE SUB-CATEGORY DETECTION ---
+                    if len(unique_results) < limit:
+                        print("  [Searching Sidebar] Scanning for pivot-links in the category tree...")
+                    
+                    # Massive selector array for all possible sidebar/pivot link locations
+                    pivot_selectors = [
+                        '#zg_left_col2 a', 
+                        'ul[role="group"] li a',
+                        '._p13n-zg-nav-tree-all_style_zg-selected__199v3 + ul a', # Children
+                        '._p13n-zg-nav-tree-all_style_zg-selected__199v3 ~ li a', # Siblings
+                        '.zg-nav-tree a',
+                        '.s-navigation-item a'
+                    ]
+                    
+                    discovered_cats = 0
+                    for sel in pivot_selectors:
+                        try:
+                            links = await page.query_selector_all(sel)
+                            for link in links:
+                                href = await link.evaluate("el => el.href")
+                                txt = await link.inner_text()
+                                txt_clean = txt.strip().lower()
+                                
+                                # Filter: Ignore parent nodes like "Books", "Any Department" or current page
+                                ignore_names = ['books', 'all books', 'any department', 'all departments', 'home']
+                                if href and href not in seen_categories and any(x in href for x in ['/zgbs/', '/best-sellers/']):
+                                    if not any(ign in txt_clean for ign in ignore_names):
+                                        print(f"    -> Queuing Pivot: {txt.strip()[:30]}")
+                                        category_queue.append(href)
+                                        seen_categories.add(href)
+                                        discovered_cats += 1
+                        except: continue
+                        
+                        print(f"  -> Discovery found {discovered_cats} potential new branches.")
+
+            print(f"Discovery Phase Finished! Total gathered: {len(unique_results)} items.")
+            return unique_results
+        except Exception as e:
+            print(f"  [Critical] Discovery Error: {e}")
+            return []
 
     async def scrape_product_details_tab(self, context, url, base_url="https://www.amazon.com"):
         if not url:
@@ -471,24 +551,21 @@ class AmazonScraper:
             price_lines = []
             seen_formats = set()
             try:
-                # Use ONLY .a-button-inner (innermost) — NOT li which wraps it and causes duplicates
+                # 1. Primary Hunt: Format Swatch Buttons
                 format_items = await page.query_selector_all(
                     '#tmmSwatches .a-button-inner, '
-                    '[id*="tmm-grid-swatch"] .a-button-inner'
+                    '[id*="tmm-grid-swatch"] .a-button-inner, '
+                    '.swatchElement .a-button-inner'
                 )
                 for fi in format_items:
                     text = clean_text(await fi.inner_text())
-                    if not text:
-                        continue
-                    # Text looks like "Kindle\nINR 92.13" or "Kindle Edition\n₹92.13"
+                    if not text: continue
+                    
                     parts = [p.strip() for p in text.split('\n') if p.strip()]
                     if len(parts) >= 2:
                         format_name = parts[0]
-                        # Skip if we already have this format (dedup)
-                        if format_name.lower() in seen_formats:
-                            continue
-                        seen_formats.add(format_name.lower())
-                        # Find the price part (contains digits and currency)
+                        if format_name.lower() in seen_formats: continue
+                        
                         price_part = next(
                             (p for p in parts[1:] if re.search(r'[\d,\.]+', p) and
                              re.search(r'[\u20b9\$\£\€]|INR|USD|GBP|EUR|Rs\.?', p, re.IGNORECASE)),
@@ -496,7 +573,23 @@ class AmazonScraper:
                         )
                         price_clean = re.sub(r'\s+', ' ', price_part).strip()
                         if format_name and price_clean:
+                            seen_formats.add(format_name.lower())
                             price_lines.append(f"{format_name} - {price_clean}")
+
+                # 2. Secondary Hunt: List-based formats (often missed)
+                if len(price_lines) < 2:
+                    format_links = await page.query_selector_all('li.swatchElement a')
+                    for flnk in format_links:
+                        raw_t = await flnk.inner_text()
+                        cleaned_t = clean_text(raw_t)
+                        for ftype in ["Paperback", "Hardcover", "Audiobook", "Kindle", "Mass Market Paperback"]:
+                            if ftype.lower() in cleaned_t.lower() and ftype.lower() not in seen_formats:
+                                p_el = await flnk.query_selector('.a-color-secondary, .a-size-mini')
+                                if p_el:
+                                    p_val = clean_text(await p_el.inner_text())
+                                    if re.search(r'\d', p_val):
+                                        price_lines.append(f"{ftype} - {p_val}")
+                                        seen_formats.add(ftype.lower())
             except Exception as e:
                 print(f"Price extraction error: {e}")
 
@@ -529,6 +622,28 @@ class AmazonScraper:
                     pass
 
             price_str = "\n".join(price_lines) if price_lines else "N/A"
+
+            # ====== AMAZON STARS AND RATINGS ======
+            rating = "N/A"
+            reviews = "N/A"
+            try:
+                # Stars
+                star_el = await page.query_selector('#acrPopoverTitle, [data-hook="rating-out-of-text"], .a-icon-star span')
+                if star_el:
+                    star_text = clean_text(await star_el.inner_text())
+                    # Format: "4.5 out of 5 stars" -> "4.5"
+                    m = re.search(r'([\d.]+)', star_text)
+                    if m: rating = m.group(1)
+
+                # Review Count
+                review_el = await page.query_selector('#acrCustomerReviewText, [data-hook="total-review-count"]')
+                if review_el:
+                    review_text = clean_text(await review_el.inner_text())
+                    # Format: "1,234 ratings" -> "1234"
+                    m = re.search(r'([\d,]+)', review_text)
+                    if m: reviews = m.group(1).replace(',', '')
+            except Exception as e:
+                print(f"Rating extraction error: {e}")
 
             # ====== NEW: SERIES, PAGES, INNER RANK EXTRACTION ======
             series_name = "N/A"
@@ -586,6 +701,8 @@ class AmazonScraper:
                 "Publication Date": pub_date,
                 "Author Name":      author,
                 "Price":            price_str,
+                "Rating":           rating,
+                "Number of Reviews": reviews,
                 "Amazon URL":       page.url,
                 "Series Name":      series_name,
                 "Book Number":      book_number,
@@ -597,7 +714,8 @@ class AmazonScraper:
             print(f"Error scraping {url}: {e}")
             return {
                 "Description": "N/A", "Publisher": "N/A", "Publication Date": "N/A", 
-                "Author Name": "N/A", "Price": "N/A", "Series Name": "N/A",
+                "Author Name": "N/A", "Price": "N/A", "Rating": "N/A", "Number of Reviews": "N/A",
+                "Series Name": "N/A",
                 "Book Number": "N/A", "Total Books": "N/A", "Pages": "N/A", "Inner Rank": "N/A"
             }
         finally:
@@ -608,7 +726,7 @@ class GoodreadsScraper:
     def __init__(self, headless=False):
         self.headless = headless
 
-    async def scrape_goodreads_data(self, context, title, author, isbn10="N/A", isbn13="N/A", asin="N/A"):
+    async def scrape_goodreads_data(self, context, title, author, isbn10="N/A", isbn13="N/A", asin="N/A", existing_url="N/A"):
         if not title or title == "N/A":
             return {}
 
@@ -616,20 +734,32 @@ class GoodreadsScraper:
         try:
             book_url = None
             
+            # --- TIER 0: Existing URL Strategy (User Requested Verification) ---
+            if existing_url and str(existing_url).startswith("http") and "goodreads.com" in str(existing_url):
+                # Check if we need a rating but only have a series URL
+                # If CHECK_COLUMN is GoodReads_Book_Rating, we should discard series URLs in Tier 0
+                # We can't see the column here directly easy, but we can check if it's for 'repair'
+                if "/series/" in str(existing_url):
+                    print(f"  Goodreads: Series URL detected in Tier 0. Checking if valid for goal...")
+                
+                print(f"  Goodreads: Discovery Tier 0 (Existing URL: {existing_url})...")
+                book_url = existing_url
+            
             # --- TIER 1: Direct ID Strategy (Most Reliable) ---
-            potential_ids = [isbn13, isbn10, asin]
-            for pid in potential_ids:
-                if pid and pid != "N/A":
-                    print(f"  Goodreads: Discovery Tier 1 (Direct ID {pid})...")
-                    direct_url = f"https://www.goodreads.com/book/isbn/{pid}"
-                    try:
-                        await page.goto(direct_url, wait_until="domcontentloaded", timeout=20000)
-                        if "goodreads.com/book/show/" in page.url or "goodreads.com/work/" in page.url:
-                            book_url = page.url
-                            print(f"  Goodreads: Successful direct access: {book_url}")
-                            break
-                    except Exception:
-                        continue
+            if not book_url:
+                potential_ids = [isbn13, isbn10, asin]
+                for pid in potential_ids:
+                    if pid and pid != "N/A":
+                        print(f"  Goodreads: Discovery Tier 1 (Direct ID {pid})...")
+                        direct_url = f"https://www.goodreads.com/book/isbn/{pid}"
+                        try:
+                            await page.goto(direct_url, wait_until="domcontentloaded", timeout=30000)
+                            if "goodreads.com/book/show/" in page.url or "goodreads.com/work/" in page.url:
+                                book_url = page.url
+                                print(f"  Goodreads: Successful direct access: {book_url}")
+                                break
+                        except Exception:
+                            continue
             
             # --- TIER 2: Internal Search (Safe since we are logged in) ---
             if not book_url:
@@ -638,7 +768,14 @@ class GoodreadsScraper:
                 search_query = f"{clean_title} {author}"
                 search_url = f"https://www.goodreads.com/search?q={search_query.replace(' ', '+')}"
                 try:
-                    await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                    await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
+                    
+                    # --- 403 Forbidden Check ---
+                    page_title = await page.title()
+                    if "403" in page_title or "Forbidden" in page_title:
+                        print(f"  [WARNING] Goodreads blocked the request (403 Forbidden). Retrying in 10s...")
+                        await asyncio.sleep(10)
+                        await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
                     
                     # Get all search results and filter for the best match
                     result_rows = await page.query_selector_all('tr[itemtype="http://schema.org/Book"]')
@@ -667,6 +804,22 @@ class GoodreadsScraper:
                             print(f"  Goodreads: Found via Internal Search (First Result): {book_url}")
                 except Exception as ie:
                     print(f"  Goodreads: Internal search failed: {ie}")
+                
+                # --- NEW: Deep Search Fallback (Simplified Title) ---
+                if not book_url and "(" in title:
+                    simplified_title = re.sub(r'\(.*?\)', '', title).strip()
+                    if simplified_title and simplified_title != title:
+                        print(f"  Goodreads: Discovery Tier 2.5 (Retry simplified: {simplified_title})...")
+                        search_query = f"{simplified_title} {author}"
+                        search_url = f"https://www.goodreads.com/search?q={search_query.replace(' ', '+')}"
+                        try:
+                            await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
+                            first_book = await page.query_selector('a.bookTitle, [data-testid="bookTitle"] a')
+                            if first_book:
+                                book_url = await first_book.evaluate("el => el.href")
+                                print(f"  Goodreads: Found via Simplified Title Search: {book_url}")
+                        except Exception:
+                            pass
 
             # --- TIER 3: Brave Discovery (Broad Fallback) ---
             if not book_url:
@@ -690,7 +843,7 @@ class GoodreadsScraper:
 
             # --- TIER 4: DuckDuckGo HTML Fallback ---
             if not book_url:
-                print(f"  Goodreads: Discovery Tier 4 (DuckDuckGo)...")
+                print(f"  Goodreads: Discovery Tier 4 (DuckDuckGo Search)...")
                 search_query = f"{normalize_title_for_search(title)} {author} in goodreads"
                 ddg_url = f"https://html.duckduckgo.com/html/?q={search_query.replace(' ', '+')}"
                 try:
@@ -704,6 +857,20 @@ class GoodreadsScraper:
                         book_url = href
                         print(f"  Goodreads: Found via DuckDuckGo: {book_url}")
                         break
+                except Exception:
+                    pass
+
+            # --- TIER 5: ASIN-Direct Fallback (Nuclear Discovery) ---
+            if not book_url and asin:
+                print(f"  Goodreads: Discovery Tier 5 (ASIN Deep Scan: {asin})...")
+                search_query = f"site:goodreads.com/book/show/ {asin}"
+                ddg_url = f"https://html.duckduckgo.com/html/?q={search_query.replace(' ', '+')}"
+                try:
+                    await page.goto(ddg_url, wait_until="domcontentloaded", timeout=30000)
+                    links = await page.query_selector_all('a[href*="goodreads.com/book/show/"]')
+                    if links:
+                        book_url = await links[0].evaluate("el => el.href")
+                        print(f"  Goodreads: Found via ASIN Deep Scan: {book_url}")
                 except Exception:
                     pass
 
@@ -732,8 +899,26 @@ class GoodreadsScraper:
                 return {}
             
             # Step 2: Final navigation to book page
-            if page.url != book_url:
-                await page.goto(book_url, wait_until="domcontentloaded", timeout=60000)
+            if page.url != book_url or "/series/" in page.url:
+                try:
+                    # If we are landed on a series page, try to find the first book
+                    if "/series/" in book_url or "/series/" in page.url:
+                        print(f"  Goodreads: Target is series. Attempting book redirection...")
+                        await page.goto(book_url, wait_until="domcontentloaded", timeout=45000)
+                        first_book = await page.query_selector('a.bookTitle, [data-testid="bookTitle"] a, a[href*="/book/show/"]')
+                        if first_book:
+                            book_url = await first_book.evaluate("el => el.href")
+                            print(f"  Goodreads: Redirected from Series to Book: {book_url}")
+                    
+                    await page.goto(book_url, wait_until="domcontentloaded", timeout=60000)
+                    # --- 403 Forbidden Check on Book Page ---
+                    page_title = await page.title()
+                    if "403" in page_title or "Forbidden" in page_title:
+                        print(f"  [WARNING] Goodreads blocked book page access (403). Retrying with delay...")
+                        await asyncio.sleep(12)
+                        await page.goto(book_url, wait_until="domcontentloaded", timeout=60000)
+                except Exception as e:
+                    print(f"  Goodreads: Book page navigation error: {e}")
             
             await asyncio.sleep(4) # Extended wait for React hydration of genres
 
@@ -753,11 +938,16 @@ class GoodreadsScraper:
             except Exception:
                 pass
             
+            # Step 2: Extract Book Details (Ratings, Series URL, etc.)
+            
             # Specific Romantasy Check
             is_romantasy = "Yes" if any("romantasy" in g.lower() for g in genres) else "No"
             genre_main = genres[0] if genres else "N/A"
             genre_sub = genres[1] if len(genres) > 1 else "N/A"
 
+            avg_rating = "N/A"
+            rating_count = "N/A"
+            
             # Step 2: Extract Book Details (Ratings, Series URL)
             # Tier 1: JSON-LD (most stable if present)
             ld_json = {}
@@ -765,12 +955,23 @@ class GoodreadsScraper:
                 ld_element = await page.query_selector('script[type="application/ld+json"]')
                 if ld_element:
                     import json
-                    ld_json = json.loads(await ld_element.inner_text())
+                    ld_json_text = await ld_element.inner_text()
+                    ld_json = json.loads(ld_json_text)
+                    
+                    # Handle both list of objects and single object
+                    if isinstance(ld_json, list):
+                        ld_json = ld_json[0]
+                    
+                    # Store temporarily to check for validity
+                    ld_avg = ld_json.get('aggregateRating', {}).get('ratingValue')
+                    ld_count = ld_json.get('aggregateRating', {}).get('ratingCount')
+                    
+                    if ld_avg and str(ld_avg) != "None":
+                        avg_rating = str(ld_avg)
+                    if ld_count and str(ld_count) != "None":
+                        rating_count = str(ld_count)
             except Exception:
                 pass
-
-            avg_rating = ld_json.get('aggregateRating', {}).get('ratingValue', "N/A")
-            rating_count = ld_json.get('aggregateRating', {}).get('ratingCount', "N/A")
 
             # Tier 2: DOM Selectors (Fallback if JSON-LD missing or partial)
             if avg_rating == "N/A" or rating_count == "N/A":
@@ -814,12 +1015,81 @@ class GoodreadsScraper:
                 except Exception:
                     pass
 
-            # Tier 3: Regex Body Scan (Last resort)
+            # --- AGGRESSIVE RETRY ZONE ---
+            # If rating is still N/A, try a "Deep Recovery" refresh
             if avg_rating == "N/A":
+                print(f"  [RETRY] Rating missing for '{title[:15]}'. Deep Recovery 1 starting...")
+                await asyncio.sleep(7)
+                await page.reload(wait_until="domcontentloaded", timeout=45000)
+                
+                # Check for 403 again after reload
+                title_check = await page.title()
+                if "403" in title_check or "Forbidden" in title_check:
+                    print(f"  [NUCLEAR] Blocked on retry. Rotating UA and waiting 15s...")
+                    await asyncio.sleep(15)
+                    await page.reload(wait_until="domcontentloaded", timeout=60000)
+
+                # Try JSON-LD again (Robust Keys)
+                try:
+                    ld_el = await page.query_selector('script[type="application/ld+json"]')
+                    if ld_el:
+                        import json
+                        ld_data = json.loads(await ld_el.inner_text())
+                        if isinstance(ld_data, list): ld_data = ld_data[0]
+                        
+                        potential_avg = ld_data.get('aggregateRating', {}).get('ratingValue')
+                        if potential_avg: avg_rating = str(potential_avg)
+                        
+                        potential_count = ld_data.get('aggregateRating', {}).get('ratingCount')
+                        if potential_count: rating_count = str(potential_count)
+                except: pass
+                
+                # If still N/A, try DOM with expanded selectors
+                if avg_rating == "N/A":
+                    try:
+                        selectors = [
+                            '.RatingStatistics__rating', 
+                            '[data-testid="ratingNum"]', 
+                            '.RatingStars__rating',
+                            '.BookPageMetadataSection__ratingValue',
+                            '[itemprop="ratingValue"]'
+                        ]
+                        for sel in selectors:
+                            r_el = await page.query_selector(sel)
+                            if r_el:
+                                txt = clean_text(await r_el.inner_text())
+                                if txt and re.search(r'\d', txt):
+                                    avg_rating = txt
+                                    break
+                    except: pass
+            
+            # --- TIER 3: NUCLEAR RECOVERY (Final Attempt) ---
+            if avg_rating == "N/A":
+                print(f"  [NUCLEAR RETRY] Still N/A for '{title[:15]}'. Final High-Depth Scan...")
+                await asyncio.sleep(12)
                 content = await page.content()
-                match = re.search(r'([\d.]+)\s+avg\s+rating', content, re.IGNORECASE)
-                if match:
-                    avg_rating = match.group(1)
+                
+                # Broad Regex Sweep (Multiple keys)
+                patterns = [
+                    r'"averageRating":\s*"?(\d+\.?\d*)"?',
+                    r'"ratingValue":\s*"?(\d+\.?\d*)"?',
+                    r'ratingValue\s*:\s*(\d+\.?\d*)',
+                    r'(\d\.\d{1,2})\s+avg\s+rating',
+                    r'rating\s+of\s+(\d\.\d{1,2})'
+                ]
+                for p in patterns:
+                    m = re.search(p, content, re.IGNORECASE)
+                    if m: 
+                        avg_rating = m.group(1)
+                        print(f"  [SUCCESS] Nuclear Rating Discovery: {avg_rating}")
+                        break
+                
+                # Last resort: Wait for selector specifically
+                if avg_rating == "N/A":
+                    try:
+                        r_el = await page.wait_for_selector('.RatingStatistics__rating', timeout=10000)
+                        if r_el: avg_rating = clean_text(await r_el.inner_text())
+                    except: pass
 
             # Extract Page Count from the book page (Standalone fallback)
             book_pages = "N/A"
@@ -893,7 +1163,7 @@ class GoodreadsScraper:
 
             if series_url and series_url != "N/A":
                 try:
-                    await page.goto(series_url, wait_until="domcontentloaded", timeout=60000)
+                    await page.goto(series_url, wait_until="domcontentloaded", timeout=90000)
                     
                     # 1. Primary books count (from header)
                     content = await page.content()

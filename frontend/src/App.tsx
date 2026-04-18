@@ -15,7 +15,7 @@ interface BookResult {
 
 function App() {
   const [url, setUrl] = useState('https://www.amazon.com/best-sellers-books-Amazon/zgbs/books/');
-  const [limit, setLimit] = useState(50);
+  const [limit, setLimit] = useState(1000);
   const [results, setResults] = useState<BookResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);

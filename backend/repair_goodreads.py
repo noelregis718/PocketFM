@@ -3,6 +3,12 @@ import os
 # Ensure the current directory is in the path for module imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Emoji-Shield: Force UTF-8 for Windows Console to prevent crashes on special characters
+try:
+    if sys.stdout.encoding.lower() != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+except AttributeError: pass
+
 import asyncio
 import re
 import pandas as pd
@@ -12,10 +18,12 @@ from scraper import GoodreadsScraper, clean_numeric
 from excel_utility import save_to_excel
 
 # Configuration
-INPUT_FILE = "scraped_data.xlsx"
-OUTPUT_FILE = "scraped_data.xlsx" 
-CHECK_COLUMN = "GoodReads_Series_URL"
-MAX_CONCURRENT_TABS = 30  # Industrial Speed!
+INPUT_FILE = "../scraped_data.xlsx"
+OUTPUT_FILE = "../scraped_data.xlsx" 
+START_EXCEL_ROW = 1  # FINAL industrial Sweep (1-500) - Total Coverage
+CHECK_COLUMN = "GoodReads_Book_Rating" 
+MAX_CONCURRENT_TABS = 15  # Full Multi-Threading
+BATCH_LIMIT = 501         # Process 1 to 500
 
 def extract_asin(url):
     """Extract ASIN from Amazon URL."""
@@ -44,10 +52,13 @@ async def repair_row(index, row, context, semaphore, gr_scraper, df, total_missi
         
         progress_counter[0] += 1
         curr = progress_counter[0]
-        print(f"[{curr}/{total_missing}] Tech-Sync Repair: {search_title} (ASIN: {asin})")
+        # Industrial Safety: Sanitize title for console to prevent Unicode crashes
+        safe_title = search_title.encode('ascii', 'ignore').decode('ascii')
+        print(f"[{curr}/{total_missing}] Tech-Sync Repair: {safe_title} (ASIN: {asin})")
         
         try:
-            gr_data = await gr_scraper.scrape_goodreads_data(context, search_title, author, asin=asin)
+            existing_url = row.get("GoodReads_Series_URL", "N/A")
+            gr_data = await gr_scraper.scrape_goodreads_data(context, search_title, author, asin=asin, existing_url=existing_url)
             
             if gr_data:
                 # AMAZON TECHNIQUE: Standardized 33-Column Mapping Block
@@ -117,14 +128,36 @@ async def perform_deep_repair(df, context):
     progress_counter = [0]
     
     def is_missing(row):
-        url_val = row.get(CHECK_COLUMN)
-        url_missing = pd.isna(url_val) or "goodreads.com" not in str(url_val).lower()
-        rating_val = row.get("Book1_Rating")
-        rating_missing = pd.isna(rating_val) or str(rating_val).strip().lower() in ["n/a", "", "0", "nan"]
-        return url_missing or rating_missing
+        # Industrial Precision: Skip truly empty rows
+        title = row.get("Book Title")
+        if pd.isna(title) or str(title).strip() == "" or str(title).strip().lower() == "nan":
+            return False
+
+        # Condition: Columns S-W must be missing
+        target_cols = [
+            "GoodReads_Series_URL", 
+            "Num_Primary_Books", 
+            "Total_Pages_Primary_Books", 
+            "Book1_Rating", 
+            "Book1_Num_Ratings"
+        ]
+        
+        for col in target_cols:
+            v = row.get(col, "N/A")
+            if pd.isna(v) or str(v).strip() == "N/A" or str(v).strip() == "":
+                return True
+        
+        return False
 
     to_repair_mask = df.apply(is_missing, axis=1)
-    to_repair = df[to_repair_mask].copy()
+    
+    # Honor START_EXCEL_ROW (Excel Row 2 is index 0, so Row 292 is index 290)
+    # We only repair rows whose index is >= (START_EXCEL_ROW - 2)
+    start_idx = max(0, START_EXCEL_ROW - 2)
+    to_repair_mask.iloc[:start_idx] = False
+    
+    to_repair_indices = df.index[to_repair_mask][:BATCH_LIMIT]
+    to_repair = df.loc[to_repair_indices].copy()
     
     if to_repair.empty:
         print("  [Deep Sweep] Coverage is already 100%. No repair needed.")
@@ -133,7 +166,7 @@ async def perform_deep_repair(df, context):
     to_repair["is_ad_title"] = to_repair["Book Title"].str.contains(r"Sponsored|Ad -|Shop now", case=False, na=False)
     total_missing = len(to_repair)
     
-    print(f"\n[PHASE 2] Starting Automated Deep Sweep for {total_missing} books...")
+    print(f"\n[PHASE 2] Starting Targeted Speed Repair for {total_missing} books...")
 
     for col in df.columns:
         df[col] = df[col].astype(object)
@@ -157,7 +190,25 @@ async def repair_goodreads_data():
         # Login Gate
         login_page = await context.new_page()
         await login_page.goto("https://www.goodreads.com/user/sign_in")
-        print("\nACTION REQUIRED: Log in to Goodreads and navigate to Home.\n")
+        
+        # --- AUTOMATED LOGIN ---
+        try:
+            # If on the initial sign-in page, click "Sign in with email"
+            email_btn = login_page.locator('a:has-text("Sign in with email")')
+            if await email_btn.is_visible():
+                await email_btn.click()
+                await login_page.wait_for_load_state("networkidle")
+            
+            # Use Amazon-style selectors for Goodreads login
+            if await login_page.locator("#ap_email").is_visible():
+                await login_page.fill("#ap_email", "noel.regis04@gmail.com")
+                await login_page.fill("#ap_password", "Noel@1024")
+                await login_page.click("#signInSubmit")
+                print("  [Auto-Login] Credentials submitted...")
+        except Exception as e:
+            print(f"  [Auto-Login] Could not automate login: {e}")
+
+        print("\nACTION REQUIRED: Handle any CAPTHCA if shown, then script will proceed.\n")
         
         login_selectors = ['a[href*="sign_out"]', '.Header_userProfile', '.headerPersonalNav', '[data-testid="notificationsIcon"]', 'a[href="/"]']
         logged_in = False
