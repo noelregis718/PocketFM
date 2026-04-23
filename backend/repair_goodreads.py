@@ -19,11 +19,11 @@ from excel_utility import save_to_excel
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_FILE = r"e:\Internship\scraped_data_shifters.xlsx"
-OUTPUT_FILE = r"e:\Internship\scraped_data_shifters.xlsx" 
+INPUT_FILE = r"E:\Internship\scraped_data_academia.xlsx"
+OUTPUT_FILE = r"E:\Internship\scraped_data_academia.xlsx" 
 START_EXCEL_ROW = 2  # Repair everything from the beginning
-MAX_CONCURRENT_TABS = 15
-BATCH_LIMIT = 500         # Sweep everything till the end
+MAX_CONCURRENT_TABS = 12
+BATCH_LIMIT = 2000         # Sweep everything till the end
 
 def extract_asin(url):
     """Extract ASIN from Amazon URL."""

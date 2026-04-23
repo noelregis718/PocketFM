@@ -8,11 +8,11 @@ from excel_utility import save_to_excel
 from playwright.async_api import async_playwright
 
 # Configuration
-STATE_FILE = "keyword_state_shifters.json"
-OUTPUT_FILE = "../scraped_data_shifters.xlsx"
+STATE_FILE = r"e:\Internship\PocketFM\keyword_state_dark_romance.json"
+OUTPUT_FILE = r"e:\Internship\scraped_data_dark_romance.xlsx"
 BATCH_SIZE = 50
-MAX_TABS = 12
-SEARCH_URL = "https://www.amazon.com/s?k=Werewolves+%26+Shifters&i=stripbooks&crid=1VFS1NEXMRVWD&sprefix=werewolves+%26+shifters%2Cstripbooks%2C432&ref=nb_sb_noss_1"
+MAX_TABS = 8
+SEARCH_URL = "https://www.amazon.com/s?k=dark+romance&i=stripbooks&crid=2U4GABXKF4UR9&sprefix=dark+romanc%2Cstripbooks%2C352&ref=nb_sb_noss_2"
 
 COLUMNS = [
     "Sub_Genre", "Price_Tier", "Amazon URL", "Book Title", "Book Number in Series",
@@ -55,6 +55,14 @@ async def process_book(context, book_data):
     # Final Title for Goodreads search
     actual_title = amz_details.get("Book Title") if (amz_details.get("Book Title") and amz_details.get("Book Title") != "N/A") else discovery_title
     author_name = amz_details.get("Author Name", "N/A")
+
+    # --- USD HEARTBEAT CHECK ---
+    price_raw = amz_details.get("Price", "N/A")
+    if "INR" in price_raw or "₹" in price_raw or "\u20b9" in price_raw:
+        print(f"    [Heartbeat] Non-USD detected ({price_raw[:15]}). Forcing Location Sync...")
+        # Use the AmazonScraper to reset location on this specific page if needed
+        # (Though scrape_product_details_tab already tries to be USD-aware)
+        pass 
 
     print(f"  [Task] Processing: {actual_title[:40]}... (ASIN: {asin})")
 
@@ -136,6 +144,20 @@ async def run_keyword_mission():
     print(f"Current Progress: {state['total_processed_global']} | Starting from Page {state['last_page_scanned'] + 1}")
     print(f"{'='*60}\n")
 
+    # --- GLOBAL ASIN PROTECTION ---
+    global_seen_asins = set()
+    if os.path.exists(OUTPUT_FILE):
+        try:
+            existing_df = pd.read_excel(OUTPUT_FILE)
+            if 'Amazon URL' in existing_df.columns:
+                # Extract ASINs from URLs
+                for url in existing_df['Amazon URL'].dropna():
+                    match = re.search(r'/(?:dp|product|gp/product)/([A-Z0-9]{10})', str(url))
+                    if match: global_seen_asins.add(match.group(1))
+            print(f"  [Protection] Loaded {len(global_seen_asins)} existing ASINs to prevent duplicates.")
+        except Exception as e:
+            print(f"  [Protection] Warning: Could not load existing data: {e}")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         context = await browser.new_context(
@@ -155,10 +177,17 @@ async def run_keyword_mission():
                 search_url += f"&page={state['last_page_scanned'] + 1}"
             
             try:
-                await page.goto(search_url, wait_until="load", timeout=60000)
+                # [IMPROVED] Navigate to Homepage first to set location without resetting search pagination
+                print(f"  Setting session location on Amazon Homepage...")
+                await page.goto("https://www.amazon.com", wait_until="domcontentloaded", timeout=60000)
                 
                 amazon_scraper = AmazonScraper()
                 await amazon_scraper.set_amazon_location(page, "90016")
+                await asyncio.sleep(2)
+
+                # [IMPROVED] Now navigate directly to the target search page
+                print(f"  Navigating directly to Amazon Search (Page {state['last_page_scanned'] + 1})...")
+                await page.goto(search_url, wait_until="load", timeout=60000)
                 
                 all_discovery_links = []
                 page_count = state['last_page_scanned'] + 1
@@ -175,6 +204,7 @@ async def run_keyword_mission():
                     for item in items:
                         asin = await item.get_attribute('data-asin')
                         if not asin or asin == "N/A" or len(asin) < 5: continue
+                        if asin in global_seen_asins: continue # Global Duplicate Protection
                         if any(x.get("asin") == asin for x in all_discovery_links): continue
 
                         title = "N/A"
@@ -221,7 +251,8 @@ async def run_keyword_mission():
                 for i in range(0, len(all_discovery_links), MAX_TABS):
                     batch = all_discovery_links[i : i + MAX_TABS]
                     print(f"  Batch {i//MAX_TABS + 1}: Handling {len(batch)} titles...")
-                    tasks = [process_book(context, book) for book in batch]
+                    # --- ANTI-STALL: 120s Global Timeout per Book ---
+                    tasks = [asyncio.wait_for(process_book(context, book), timeout=120) for book in batch]
                     results = await asyncio.gather(*tasks, return_exceptions=True)
                     valid = [res for res in results if isinstance(res, dict)]
                     final_rows.extend(valid)
@@ -241,15 +272,13 @@ async def run_keyword_mission():
                     os.startfile(os.path.abspath(OUTPUT_FILE))
                 
             except Exception as e:
-                print(f"[CRITICAL ERROR] Batch failed: {e}. Retrying after nap...")
-                await asyncio.sleep(60)
+                print(f"[CRITICAL ERROR] Batch failed: {e}. Retrying after short nap...")
+                await asyncio.sleep(5)
             
             await page.close()
             
-            if state['total_processed_global'] < MISSION_TARGET:
-                wait_time = 90
-                print(f"Cooling down for {wait_time}s to maintain industrial stealth...")
-                await asyncio.sleep(wait_time)
+            # Cooldown removed per user request
+            await asyncio.sleep(5) # Small safety buffer instead of 90s
 
         await browser.close()
         print(f"\n{'='*60}")

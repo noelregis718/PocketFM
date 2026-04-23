@@ -85,37 +85,63 @@ class AmazonScraper:
         """Automates setting the Amazon delivery location to a US zip code (ensures USD)."""
         print(f"  [Location] Setting Amazon location to US Zip: {zip_code}...")
         try:
-            # 1. Click the "Deliver to" button
-            loc_button = await page.query_selector('#nav-global-location-popover-link, #nav-packard-glow-loc-icon')
+            # Wait for any of the common location selectors to appear
+            selectors = [
+                '#nav-global-location-popover-link',
+                '#nav-packard-glow-loc-icon',
+                '#glow-ingress-block',
+                '#nav-global-location-slot'
+            ]
+            
+            loc_button = None
+            for sel in selectors:
+                try:
+                    loc_button = await page.wait_for_selector(sel, timeout=10000)
+                    if loc_button: break
+                except: continue
+
             if loc_button:
                 await loc_button.click()
-                await asyncio.sleep(2)
+                await asyncio.sleep(3) # Wait for popover
                 
-                # 2. Enter Zip Code if input is visible
+                # Enter Zip Code if input is visible
                 zip_input = await page.query_selector('#GLUXZipUpdateInput')
                 if zip_input:
                     await zip_input.fill(zip_code)
                     await asyncio.sleep(1)
                     
-                    # 3. Click Apply
+                    # Click Apply
                     apply_btn = await page.query_selector('#GLUXZipUpdate .a-button-input, #GLUXZipUpdate input')
                     if apply_btn:
                         await apply_btn.click()
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(3)
                 
-                # 4. Check for "Continue" or "Done" button in the popover
-                # Often after apply, a "Continue" button appears
-                continue_btn = await page.query_selector('span[id="GLUXConfirmClose"] input, [name="glowDoneButton"]')
+                # Check for "Continue" or "Done" button
+                continue_btn = await page.query_selector('span[id="GLUXConfirmClose"] input, [name="glowDoneButton"], #GLUXConfirmClose-announce')
                 if continue_btn and await continue_btn.is_visible():
                     await continue_btn.click()
                     await asyncio.sleep(2)
                 else:
-                    # Alternative: just refresh if apply was successful
-                    await page.reload(wait_until="domcontentloaded")
+                    # Alternative: If it's a "Done" button
+                    done_btn = await page.query_selector('button[name="glowDoneButton"]')
+                    if done_btn and await done_btn.is_visible():
+                        await done_btn.click()
+                        await asyncio.sleep(2)
+                    else:
+                        # Final Fallback: Refresh the page to lock in cookies
+                        await page.reload(wait_until="domcontentloaded")
                 
                 print(f"  [Location] Done. Verified location: {zip_code}")
             else:
-                print("  [Location] Warning: Could not find location button.")
+                print("  [Location] Warning: Could not find location button with standard selectors.")
+                # Strategy 2: Try to find by text if IDs failed
+                try:
+                    text_loc = await page.locator('text="Deliver to"').first
+                    if await text_loc.is_visible():
+                        await text_loc.click()
+                        await asyncio.sleep(2)
+                        print("  [Location] Found location button via Text Search.")
+                except: pass
         except Exception as e:
             print(f"  [Location] Error setting location: {e}")
 
@@ -372,14 +398,25 @@ class AmazonScraper:
                 '#byline a',
                 '.author .a-link-normal',
                 'span.author a',
+                '#authorName',
+                '.contributorNameID',
+                '#author-follow-button',
+                'a[data-asin*="B0"]',
+                '.a-link-normal.contributorNameID'
             ]:
                 el = await page.query_selector(sel)
                 if el:
                     text = clean_text(await el.inner_text())
+                    # Filter out non-author strings like "Visit Amazon's..."
+                    text = re.sub(r"Visit Amazon's\s+", "", text, flags=re.IGNORECASE)
+                    text = re.sub(r"\s+Page", "", text, flags=re.IGNORECASE)
+                    text = re.sub(r"Search results for this author", "", text, flags=re.IGNORECASE)
+                    
                     if (text and len(text) > 1
                         and not re.match(r'^[\d\.\$,]+$', text)
                         and 'out of' not in text.lower()
-                        and 'stars' not in text.lower()):
+                        and 'stars' not in text.lower()
+                        and 'ratings' not in text.lower()):
                         author = text
                         break
 
@@ -771,7 +808,15 @@ class GoodreadsScraper:
                 try:
                     search_query = f"{extracted_series} {author} series goodreads"
                     search_url = f"https://www.goodreads.com/search?q={search_query.replace(' ', '+')}"
-                    await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                    await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
+                    await asyncio.sleep(2)
+                    
+                    # Check for "Robot Check"
+                    content = await page.content()
+                    if "Robot Check" in content or "Please verify you are a human" in content:
+                        print("  Goodreads: CAPTCHA detected. Cooling down...")
+                        await asyncio.sleep(15)
+                        return {}
                     
                     # Look for a /series/ link first
                     series_link = await page.query_selector('a[href*="/series/"]')
@@ -790,7 +835,15 @@ class GoodreadsScraper:
                         print(f"  Goodreads: Discovery Tier 1 (Direct ID {pid})...")
                         direct_url = f"https://www.goodreads.com/book/isbn/{pid}"
                         try:
-                            await page.goto(direct_url, wait_until="domcontentloaded", timeout=30000)
+                            await page.goto(direct_url, wait_until="domcontentloaded", timeout=45000)
+                            await asyncio.sleep(2)
+                            
+                            # Check for "Robot Check"
+                            content = await page.content()
+                            if "Robot Check" in content or "Please verify you are a human" in content:
+                                print("  Goodreads: CAPTCHA detected (Tier 1). Cooling down...")
+                                await asyncio.sleep(15)
+                                return {}
                             if "goodreads.com/book/show/" in page.url or "goodreads.com/work/" in page.url:
                                 book_url = page.url
                                 print(f"  Goodreads: Successful direct access: {book_url}")
@@ -805,9 +858,15 @@ class GoodreadsScraper:
                 search_query = f"{clean_title} {author}"
                 search_url = f"https://www.goodreads.com/search?q={search_query.replace(' ', '+')}"
                 try:
+                    print(f"    [Goodreads] Searching: {search_url}")
                     await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
+                    await asyncio.sleep(2)
                     
-                    # --- 403 Forbidden Check ---
+                    # Wait for results to appear
+                    try:
+                        await page.wait_for_selector('a.bookTitle, .bookData', timeout=10000)
+                    except:
+                        pass
                     page_title = await page.title()
                     if "403" in page_title or "Forbidden" in page_title:
                         print(f"  [WARNING] Goodreads blocked the request (403 Forbidden). Retrying in 10s...")
