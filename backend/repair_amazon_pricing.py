@@ -13,10 +13,10 @@ from excel_utility import save_to_excel
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_FILE = r"E:\Internship\scraped_data_academia.xlsx"
-OUTPUT_FILE = r"E:\Internship\scraped_data_academia.xlsx"
+INPUT_FILE = r"E:\Internship\scraped_data_dark_romance.xlsx"
+OUTPUT_FILE = r"E:\Internship\scraped_data_dark_romance.xlsx"
 MAX_CONCURRENT_TABS = 8
-BATCH_LIMIT = 2000  # As requested
+BATCH_LIMIT = 2000  # Sweep till the end
 
 def needs_pricing_repair(val):
     """Detect if pricing needs fix: N/A, empty, or INR/₹."""

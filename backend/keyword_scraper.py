@@ -8,11 +8,11 @@ from excel_utility import save_to_excel
 from playwright.async_api import async_playwright
 
 # Configuration
-STATE_FILE = r"e:\Internship\PocketFM\keyword_state_dark_romance.json"
-OUTPUT_FILE = r"e:\Internship\scraped_data_dark_romance.xlsx"
+STATE_FILE = r"e:\Internship\PocketFM\keyword_state_forbidden_romance.json"
+OUTPUT_FILE = r"e:\Internship\scraped_data_forbidden_romance.xlsx"
 BATCH_SIZE = 50
 MAX_TABS = 8
-SEARCH_URL = "https://www.amazon.com/s?k=dark+romance&i=stripbooks&crid=2U4GABXKF4UR9&sprefix=dark+romanc%2Cstripbooks%2C352&ref=nb_sb_noss_2"
+SEARCH_URL = "https://www.amazon.com/s?k=forbidden+romance&i=stripbooks&crid=QCDDWJZ987RE&sprefix=forbiddenromance%2Cstripbooks%2C317&ref=nb_sb_noss"
 
 COLUMNS = [
     "Sub_Genre", "Price_Tier", "Amazon URL", "Book Title", "Book Number in Series",
@@ -52,19 +52,30 @@ async def process_book(context, book_data):
     # 1. Amazon Details
     amz_details = await amazon.scrape_product_details_tab(context, url)
     
+    # --- USD HEARTBEAT CHECK ---
+    price_raw = amz_details.get("Price", "N/A")
+    if "INR" in price_raw or "₹" in price_raw or "\u20b9" in price_raw or "Rs" in price_raw:
+        print(f"    [Heartbeat] Non-USD detected ({price_raw[:15]}). Forcing Location Sync and retrying...")
+        try:
+            temp_page = await context.new_page()
+            await temp_page.goto("https://www.amazon.com", wait_until="domcontentloaded", timeout=45000)
+            await amazon.set_amazon_location(temp_page, "90016")
+            for _ in range(3):
+                await asyncio.sleep(2)
+                loc_text = await temp_page.evaluate("() => { const el = document.querySelector('#glow-ingress-line2'); return el ? el.innerText : ''; }")
+                if "90016" in loc_text or "Los Angeles" in loc_text:
+                    break
+                await amazon.set_amazon_location(temp_page, "90016")
+            await temp_page.close()
+            # Retry extraction
+            amz_details = await amazon.scrape_product_details_tab(context, url)
+        except Exception as e:
+            print(f"    [Heartbeat] Failed to fix location: {e}")
+    
     # Final Title for Goodreads search
     actual_title = amz_details.get("Book Title") if (amz_details.get("Book Title") and amz_details.get("Book Title") != "N/A") else discovery_title
     author_name = amz_details.get("Author Name", "N/A")
-
-    # --- USD HEARTBEAT CHECK ---
-    price_raw = amz_details.get("Price", "N/A")
-    if "INR" in price_raw or "₹" in price_raw or "\u20b9" in price_raw:
-        print(f"    [Heartbeat] Non-USD detected ({price_raw[:15]}). Forcing Location Sync...")
-        # Use the AmazonScraper to reset location on this specific page if needed
-        # (Though scrape_product_details_tab already tries to be USD-aware)
-        pass 
-
-    print(f"  [Task] Processing: {actual_title[:40]}... (ASIN: {asin})")
+    print(f"  [Task] Processing: {actual_title[:40]}... (ASIN: {asin})", flush=True)
 
     # 2. Goodreads Details (INTEGRATED SCAN)
     if actual_title and actual_title != "N/A":
@@ -134,15 +145,17 @@ async def process_book(context, book_data):
         "Other_Contact": ath_details.get("Other_Contact", "N/A")
     }
 
-async def run_keyword_mission():
+LOCK_FILE = r"e:\Internship\PocketFM\keyword_scraper.lock"
+
+async def _run_keyword_mission_core():
     state = load_state()
     # MISSION TARGET: Scale by another 1,000 titles
     MISSION_TARGET = state['total_processed_global'] + 1000
     
-    print(f"\n{'='*60}")
-    print(f"INDUSTRIAL SCALING MISSION: Target {MISSION_TARGET} Titles")
-    print(f"Current Progress: {state['total_processed_global']} | Starting from Page {state['last_page_scanned'] + 1}")
-    print(f"{'='*60}\n")
+    print(f"\n{'='*60}", flush=True)
+    print(f"INDUSTRIAL SCALING MISSION: Target {MISSION_TARGET} Titles", flush=True)
+    print(f"Current Progress: {state['total_processed_global']} | Starting from Page {state['last_page_scanned'] + 1}", flush=True)
+    print(f"{'='*60}\n", flush=True)
 
     # --- GLOBAL ASIN PROTECTION ---
     global_seen_asins = set()
@@ -160,10 +173,14 @@ async def run_keyword_mission():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
+        print("  [System] Browser launched in Stable mode.")
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            locale="en-US",
+            timezone_id="America/Los_Angeles"
         )
         
+        # Process only one batch for this run
         while state['total_processed_global'] < MISSION_TARGET:
             curr_batch_start = state['next_batch_start']
             print(f"\n>>> [MISSION BATCH] Processing {curr_batch_start} to {curr_batch_start + BATCH_SIZE - 1}...")
@@ -173,21 +190,36 @@ async def run_keyword_mission():
             # --- Discovery Phase ---
             print(f"  Navigating to Amazon Search (Page {state['last_page_scanned'] + 1})...")
             search_url = SEARCH_URL
-            if state['last_page_scanned'] > 0:
-                search_url += f"&page={state['last_page_scanned'] + 1}"
-            
             try:
-                # [IMPROVED] Navigate to Homepage first to set location without resetting search pagination
-                print(f"  Setting session location on Amazon Homepage...")
-                await page.goto("https://www.amazon.com", wait_until="domcontentloaded", timeout=60000)
+                # [FIXED] Navigate to base search URL first to set location.
+                print(f"  Navigating directly to base Amazon Search to set location...")
+                await page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
                 
                 amazon_scraper = AmazonScraper()
                 await amazon_scraper.set_amazon_location(page, "90016")
-                await asyncio.sleep(2)
+                
+                # VERIFICATION LOOP
+                location_verified = False
+                for _ in range(3):
+                    await asyncio.sleep(2)
+                    loc_text = await page.evaluate("() => { const el = document.querySelector('#glow-ingress-line2'); return el ? el.innerText : ''; }")
+                    if "90016" in loc_text or "Los Angeles" in loc_text:
+                        location_verified = True
+                        break
+                    print("    [Location] Verification failed, retrying...")
+                    await amazon_scraper.set_amazon_location(page, "90016")
+                
+                if not location_verified:
+                    print("  [Warning] Could not verify US location, but proceeding anyway.")
 
-                # [IMPROVED] Now navigate directly to the target search page
-                print(f"  Navigating directly to Amazon Search (Page {state['last_page_scanned'] + 1})...")
-                await page.goto(search_url, wait_until="load", timeout=60000)
+                # NOW navigate to the target page to ensure it doesn't drop pagination
+                if state['last_page_scanned'] > 0:
+                    target_page = state['last_page_scanned'] + 1
+                    search_url += f"&page={target_page}&ref=sr_pg_{target_page}"
+                    print(f"  Navigating directly to Target Amazon Search (Page {target_page})...")
+                    await page.goto(search_url, wait_until="load", timeout=60000)
+                else:
+                    await page.reload(wait_until="load")
                 
                 all_discovery_links = []
                 page_count = state['last_page_scanned'] + 1
@@ -195,6 +227,7 @@ async def run_keyword_mission():
                 
                 while len(all_discovery_links) < BATCH_SIZE:
                     for i in range(6):
+                        print(f"    [Discovery] Scrolling... ({i+1}/6)")
                         await page.evaluate("window.scrollBy(0, 1500)")
                         await asyncio.sleep(2.0)
                     
@@ -236,15 +269,31 @@ async def run_keyword_mission():
                             found_this_page += 1
                         if len(all_discovery_links) >= BATCH_SIZE: break
                     
-                    print(f"    -> Captured {found_this_page} titles. (Total: {len(all_discovery_links)})")
+                    print(f"    -> Captured {found_this_page} titles. (Total: {len(all_discovery_links)})", flush=True)
 
                     if len(all_discovery_links) < BATCH_SIZE:
-                        next_btn = await page.query_selector('a.s-pagination-next')
+                        # Improved Pagination Selectors
+                        next_btn = None
+                        pagination_selectors = [
+                            'a.s-pagination-next', 
+                            'li.a-last a', 
+                            'a:has-text("Next")', 
+                            '.s-pagination-item.s-pagination-next'
+                        ]
+                        for p_sel in pagination_selectors:
+                            try:
+                                next_btn = await page.query_selector(p_sel)
+                                if next_btn: break
+                            except: continue
+
                         if next_btn:
+                            print(f"    [Pagination] Clicking Next...")
                             await next_btn.click()
                             page_count += 1
                             await asyncio.sleep(8)
-                        else: break
+                        else: 
+                            print(f"    [Pagination] Warning: Next button not found. Breaking discovery.")
+                            break
                 
                 # --- Extraction Phase ---
                 final_rows = []
@@ -277,8 +326,9 @@ async def run_keyword_mission():
             
             await page.close()
             
-            # Cooldown removed per user request
-            await asyncio.sleep(5) # Small safety buffer instead of 90s
+            # STOP AFTER ONE BATCH as requested
+            print("\n[STOP] Single batch mission complete.")
+            break
 
         await browser.close()
         print(f"\n{'='*60}")
@@ -289,8 +339,17 @@ async def run_keyword_mission():
         if os.name == 'nt' and os.path.exists(OUTPUT_FILE):
             os.startfile(os.path.abspath(OUTPUT_FILE))
 
-if __name__ == "__main__":
-    asyncio.run(run_keyword_mission())
+async def run_keyword_mission():
+    if os.path.exists(LOCK_FILE):
+        print(f"[ERROR] Scraper is already running (lock file {LOCK_FILE} exists).")
+        return
+    with open(LOCK_FILE, 'w') as f:
+        f.write("locked")
+    try:
+        await _run_keyword_mission_core()
+    finally:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
 
 if __name__ == "__main__":
     asyncio.run(run_keyword_mission())
