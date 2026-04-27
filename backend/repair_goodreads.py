@@ -19,9 +19,9 @@ from excel_utility import save_to_excel
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_FILE = r"E:\Internship\scraped_data_forbidden_romance.xlsx"
-OUTPUT_FILE = r"E:\Internship\scraped_data_forbidden_romance.xlsx"
-START_EXCEL_ROW = 2  # Repair everything from the beginning
+INPUT_FILE = r"e:\Internship\PocketFM\Amazon Keyword - Fantasy Romance.xlsx"
+OUTPUT_FILE = r"e:\Internship\PocketFM\Amazon Keyword - Fantasy Romance.xlsx"
+START_EXCEL_ROW = 999  # Start of today's scraping
 MAX_CONCURRENT_TABS = 12
 BATCH_LIMIT = 5000         # Sweep everything till the end
 
@@ -136,6 +136,7 @@ async def perform_deep_repair(df, context):
 
         # Condition: Columns S-W must be missing
         target_cols = [
+            "Sub_Genre",
             "GoodReads_Series_URL", 
             "Num_Primary_Books", 
             "Total_Pages_Primary_Books", 

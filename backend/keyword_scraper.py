@@ -8,11 +8,11 @@ from excel_utility import save_to_excel
 from playwright.async_api import async_playwright
 
 # Configuration
-STATE_FILE = r"e:\Internship\PocketFM\keyword_state_forbidden_romance.json"
-OUTPUT_FILE = r"e:\Internship\scraped_data_forbidden_romance.xlsx"
+STATE_FILE = r"e:\Internship\PocketFM\backend\keyword_state.json"
+OUTPUT_FILE = r"e:\Internship\PocketFM\Amazon Keyword - Fantasy Romance.xlsx"
 BATCH_SIZE = 50
 MAX_TABS = 8
-SEARCH_URL = "https://www.amazon.com/s?k=forbidden+romance&i=stripbooks&crid=QCDDWJZ987RE&sprefix=forbiddenromance%2Cstripbooks%2C317&ref=nb_sb_noss"
+SEARCH_URL = "https://www.amazon.com/s?k=fantasy+romance&i=stripbooks&crid=28AEJRI2U74G8&qid=1776231644&sprefix=fantasy+romance%2Cstripbooks%2C364&xpid=roloQs4pN_CDY&ref=sr_pg_1"
 
 COLUMNS = [
     "Sub_Genre", "Price_Tier", "Amazon URL", "Book Title", "Book Number in Series",
@@ -149,8 +149,8 @@ LOCK_FILE = r"e:\Internship\PocketFM\keyword_scraper.lock"
 
 async def _run_keyword_mission_core():
     state = load_state()
-    # MISSION TARGET: Scale by another 1,000 titles
-    MISSION_TARGET = state['total_processed_global'] + 1000
+    # MISSION TARGET: Scale by another 500 titles
+    MISSION_TARGET = state['total_processed_global'] + 50
     
     print(f"\n{'='*60}", flush=True)
     print(f"INDUSTRIAL SCALING MISSION: Target {MISSION_TARGET} Titles", flush=True)
@@ -213,19 +213,47 @@ async def _run_keyword_mission_core():
                     print("  [Warning] Could not verify US location, but proceeding anyway.")
 
                 # NOW navigate to the target page to ensure it doesn't drop pagination
-                if state['last_page_scanned'] > 0:
-                    target_page = state['last_page_scanned'] + 1
-                    search_url += f"&page={target_page}&ref=sr_pg_{target_page}"
+                target_page = state['last_page_scanned'] + 1
+                if target_page > 1:
+                    # Robustly replace or append page parameters
+                    if "page=" in search_url:
+                        search_url = re.sub(r'page=\d+', f'page={target_page}', search_url)
+                    else:
+                        search_url += f"&page={target_page}"
+                    
+                    if "ref=sr_pg_" in search_url:
+                        search_url = re.sub(r'ref=sr_pg_\d+', f'ref=sr_pg_{target_page}', search_url)
+                    else:
+                        search_url += f"&ref=sr_pg_{target_page}"
+                        
                     print(f"  Navigating directly to Target Amazon Search (Page {target_page})...")
                     await page.goto(search_url, wait_until="load", timeout=60000)
                 else:
-                    await page.reload(wait_until="load")
+                    print(f"  Navigating to base Amazon Search...")
+                    await page.goto(SEARCH_URL, wait_until="load", timeout=60000)
                 
                 all_discovery_links = []
                 page_count = state['last_page_scanned'] + 1
-                seen_titles = [] # Reset for this batch to ensure fresh lookup
+                seen_titles = [] 
+                consecutive_empty_pages = 0
                 
-                while len(all_discovery_links) < BATCH_SIZE:
+                mission_aborted_end_of_results = False
+                while len(all_discovery_links) < BATCH_SIZE and consecutive_empty_pages < 3:
+                    print(f"\n  [Discovery] Scanning Page {page_count} for new titles...")
+                    
+                    # Check for "No results" message
+                    no_results_text = await page.evaluate("""() => {
+                        const text = document.body.innerText;
+                        return text.includes("No results for") || 
+                               text.includes("Try checking your spelling") ||
+                               text.includes("did not match any products") ||
+                               text.includes("No more results");
+                    }""")
+                    if no_results_text:
+                        print(f"    [Discovery] End of results detected on Page {page_count}. Stopping mission.")
+                        mission_aborted_end_of_results = True
+                        break
+
                     for i in range(6):
                         print(f"    [Discovery] Scrolling... ({i+1}/6)")
                         await page.evaluate("window.scrollBy(0, 1500)")
@@ -269,31 +297,55 @@ async def _run_keyword_mission_core():
                             found_this_page += 1
                         if len(all_discovery_links) >= BATCH_SIZE: break
                     
-                    print(f"    -> Captured {found_this_page} titles. (Total: {len(all_discovery_links)})", flush=True)
+                    print(f"    -> Captured {found_this_page} titles on Page {page_count}. (Total Discovery: {len(all_discovery_links)})", flush=True)
 
-                    if len(all_discovery_links) < BATCH_SIZE:
-                        # Improved Pagination Selectors
-                        next_btn = None
-                        pagination_selectors = [
-                            'a.s-pagination-next', 
-                            'li.a-last a', 
-                            'a:has-text("Next")', 
-                            '.s-pagination-item.s-pagination-next'
-                        ]
-                        for p_sel in pagination_selectors:
-                            try:
-                                next_btn = await page.query_selector(p_sel)
-                                if next_btn: break
-                            except: continue
+                    if found_this_page == 0:
+                        consecutive_empty_pages += 1
+                        print(f"    [Warning] Page {page_count} had no new titles. ({consecutive_empty_pages}/3 empty pages)")
+                    else:
+                        consecutive_empty_pages = 0
 
-                        if next_btn:
-                            print(f"    [Pagination] Clicking Next...")
-                            await next_btn.click()
-                            page_count += 1
-                            await asyncio.sleep(8)
-                        else: 
-                            print(f"    [Pagination] Warning: Next button not found. Breaking discovery.")
-                            break
+                    if len(all_discovery_links) < BATCH_SIZE and consecutive_empty_pages < 3:
+                        # Improved Pagination Logic
+                        page_count += 1
+                        print(f"    [Pagination] Attempting move to Page {page_count}...")
+                        
+                        # Try direct URL navigation as it is more reliable for Amazon than clicking Next
+                        if "page=" in search_url:
+                            search_url = re.sub(r'page=\d+', f'page={page_count}', search_url)
+                        else:
+                            search_url += f"&page={page_count}"
+                        
+                        if "ref=sr_pg_" in search_url:
+                            search_url = re.sub(r'ref=sr_pg_\d+', f'ref=sr_pg_{page_count}', search_url)
+                        else:
+                            search_url += f"&ref=sr_pg_{page_count}"
+                        
+                        try:
+                            print(f"    [Pagination] Navigating to {search_url[:60]}...")
+                            await page.goto(search_url, wait_until="load", timeout=60000)
+                            # Update state immediately so we don't loop on the same page if a retry happens
+                            state['last_page_scanned'] = page_count - 1
+                            save_state(state)
+                            await asyncio.sleep(5)
+                        except Exception as e:
+                            print(f"    [Pagination] Direct navigation failed: {e}. Falling back to Next button click.")
+                            next_btn = None
+                            pagination_selectors = ['a.s-pagination-next', 'li.a-last a', 'a:has-text("Next")']
+                            for p_sel in pagination_selectors:
+                                try:
+                                    next_btn = await page.query_selector(p_sel)
+                                    if next_btn: break
+                                except: continue
+                            
+                            if next_btn:
+                                await next_btn.click()
+                                state['last_page_scanned'] = page_count - 1
+                                save_state(state)
+                                await asyncio.sleep(8)
+                            else:
+                                print(f"    [Pagination] Critical: Next button not found and navigation failed. Stopping discovery.")
+                                break
                 
                 # --- Extraction Phase ---
                 final_rows = []
@@ -311,7 +363,18 @@ async def _run_keyword_mission_core():
                 state['last_page_scanned'] = page_count
                 state['total_processed_global'] += len(final_rows)
                 state['next_batch_start'] += len(final_rows)
+                if final_rows:
+                    state['last_book_title'] = final_rows[-1]['Book Title']
                 save_state(state)
+                
+                if mission_aborted_end_of_results or (not final_rows and consecutive_empty_pages >= 3):
+                    if mission_aborted_end_of_results:
+                        print(f"\n[Terminating] Reached the end of Amazon results. No more books to scrape.")
+                        break
+                    else:
+                        print(f"\n[Notice] Hit a wall of 3 empty pages. Advancing starting page to {page_count} and continuing...")
+                        state['last_page_scanned'] = page_count
+                        save_state(state)
                 
                 print(f"\n[OK] Batch Complete. Total Processed: {state['total_processed_global']}/{MISSION_TARGET}")
                 
@@ -326,9 +389,10 @@ async def _run_keyword_mission_core():
             
             await page.close()
             
-            # STOP AFTER ONE BATCH as requested
-            print("\n[STOP] Single batch mission complete.")
-            break
+            # Continue until MISSION_TARGET is reached
+            if state['total_processed_global'] >= MISSION_TARGET:
+                print("\n[OK] Mission target reached.")
+                break
 
         await browser.close()
         print(f"\n{'='*60}")

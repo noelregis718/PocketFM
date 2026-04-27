@@ -13,10 +13,10 @@ from excel_utility import save_to_excel
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_FILE = r"E:\Internship\scraped_data_dark_romance.xlsx"
-OUTPUT_FILE = r"E:\Internship\scraped_data_dark_romance.xlsx"
+INPUT_FILE = r"e:\Internship\PocketFM\Amazon Keyword - Fantasy Romance.xlsx"
+OUTPUT_FILE = r"e:\Internship\PocketFM\Amazon Keyword - Fantasy Romance.xlsx"
 MAX_CONCURRENT_TABS = 8
-BATCH_LIMIT = 2000  # Sweep till the end
+BATCH_LIMIT = 500  # First batch mission
 
 def needs_pricing_repair(val):
     """Detect if pricing needs fix: N/A, empty, or INR/₹."""
@@ -43,7 +43,11 @@ async def repair_amazon_pricing():
     
     # Identify rows needing repair
     to_repair_mask = df['Price_Tier'].apply(needs_pricing_repair)
-    to_repair_indices = df.index[to_repair_mask][:BATCH_LIMIT]
+    
+    # Range limit: Focus on titles from 1050 onwards
+    START_ROW = 1052
+    range_mask = df.index >= (START_ROW - 2)
+    to_repair_indices = df.index[to_repair_mask & range_mask][:BATCH_LIMIT]
     
     if len(to_repair_indices) == 0:
         print("Coverage is already 100% USD. No repair needed.")
@@ -136,9 +140,20 @@ async def repair_amazon_pricing():
                 except Exception as e:
                     print(f"  -> ERROR [{curr}]: {e}")
                     
-        # Launch tasks
-        tasks = [process_price_row(idx) for idx in to_repair_indices]
-        await asyncio.gather(*tasks)
+        # Launch tasks in smaller chunks to allow for periodic saving
+        total_indices = list(to_repair_indices)
+        CHUNKS_SIZE = 10
+        for i in range(0, len(total_indices), CHUNKS_SIZE):
+            chunk = total_indices[i : i + CHUNKS_SIZE]
+            print(f"\n--- [Checkpoint] Processing chunk {i//CHUNKS_SIZE + 1} ({len(chunk)} titles) ---")
+            
+            tasks = [process_price_row(idx) for idx in chunk]
+            await asyncio.gather(*tasks)
+            
+            # Periodic Save
+            print(f"  [Auto-Save] Updating master Excel file...")
+            save_to_excel(df.to_dict('records'), OUTPUT_FILE)
+            await asyncio.sleep(2) # Give OS a breath for file handles
         
         await browser.close()
         

@@ -599,8 +599,7 @@ class AmazonScraper:
                     pass
 
             # ====== STRUCTURED PRICE EXTRACTION ======
-            # Extract all format prices from the product page's format switcher (#tmmSwatches)
-            # Output format: "Kindle - INR 92.13\nHardcover - INR 1,674.20\nPaperback - INR 850.00"
+            # Extract all format prices from the product page
             price_lines = []
             seen_formats = set()
             try:
@@ -608,71 +607,74 @@ class AmazonScraper:
                 format_items = await page.query_selector_all(
                     '#tmmSwatches .a-button-inner, '
                     '[id*="tmm-grid-swatch"] .a-button-inner, '
-                    '.swatchElement .a-button-inner'
+                    '.swatchElement .a-button-inner, '
+                    '.a-button-inner:has(.a-price)'
                 )
                 for fi in format_items:
                     text = clean_text(await fi.inner_text())
                     if not text: continue
                     
                     parts = [p.strip() for p in text.split('\n') if p.strip()]
-                    if len(parts) >= 2:
-                        format_name = parts[0]
-                        if format_name.lower() in seen_formats: continue
-                        
-                        price_part = next(
-                            (p for p in parts[1:] if re.search(r'[\d,\.]+', p) and
-                             re.search(r'[\u20b9\$\£\€]|INR|USD|GBP|EUR|Rs\.?', p, re.IGNORECASE)),
-                            parts[-1]
-                        )
-                        price_clean = re.sub(r'\s+', ' ', price_part).strip()
-                        if format_name and price_clean:
+                    if len(parts) >= 1:
+                        format_name = "Price"
+                        price_val = "N/A"
+                        for ftype in ["Kindle", "Paperback", "Hardcover", "Audiobook", "Audio CD", "Multimedia CD"]:
+                            if any(ftype.lower() in p.lower() for p in parts):
+                                format_name = ftype
+                                break
+                        for p in parts:
+                            if re.search(r'[\d,\.]+', p) and re.search(r'[\u20b9\$\£\€]|INR|USD|GBP|EUR|Rs\.?', p, re.IGNORECASE):
+                                price_val = p
+                                break
+                        if price_val != "N/A" and format_name.lower() not in seen_formats:
                             seen_formats.add(format_name.lower())
-                            price_lines.append(f"{format_name} - {price_clean}")
+                            price_lines.append(f"{format_name} - {price_val}")
 
-                # 2. Secondary Hunt: List-based formats (often missed)
+                # 2. Secondary Hunt: Core Price Selectors
+                if not price_lines:
+                    for p_sel in [
+                        '#corePrice_feature_div .a-price .a-offscreen',
+                        '#corePrice_desktop .a-price .a-offscreen',
+                        '#kindle-price', '#price', '.a-price .a-offscreen', '.slot-price .a-offscreen'
+                    ]:
+                        try:
+                            p_el = await page.query_selector(p_sel)
+                            if p_el:
+                                p_val = clean_text(await p_el.inner_text())
+                                if p_val and re.search(r'\d', p_val):
+                                    f_name = "Price"
+                                    if "kindle" in url.lower(): f_name = "Kindle"
+                                    elif "paperback" in url.lower(): f_name = "Paperback"
+                                    price_lines.append(f"{f_name} - {p_val}")
+                                    break
+                        except: continue
+
+                # 3. Tertiary Hunt: List-based formats
                 if len(price_lines) < 2:
-                    format_links = await page.query_selector_all('li.swatchElement a')
+                    format_links = await page.query_selector_all('li.swatchElement a, .olp-text-box a')
                     for flnk in format_links:
                         raw_t = await flnk.inner_text()
                         cleaned_t = clean_text(raw_t)
                         for ftype in ["Paperback", "Hardcover", "Audiobook", "Kindle", "Mass Market Paperback"]:
                             if ftype.lower() in cleaned_t.lower() and ftype.lower() not in seen_formats:
-                                p_el = await flnk.query_selector('.a-color-secondary, .a-size-mini')
+                                p_el = await flnk.query_selector('.a-color-secondary, .a-size-mini, .a-price')
                                 if p_el:
                                     p_val = clean_text(await p_el.inner_text())
                                     if re.search(r'\d', p_val):
                                         price_lines.append(f"{ftype} - {p_val}")
                                         seen_formats.add(ftype.lower())
+
+                # 4. Fallback: Full Page Text Search
+                if not price_lines:
+                    full_txt = await page.evaluate("() => document.body.innerText")
+                    for ftype in ["Kindle", "Paperback", "Hardcover", "Audiobook"]:
+                        m = re.search(ftype + r'[\s\S]{0,50}?((?:\$|INR|₹|Rs\.?)\s*[\d,]+\.?\d*)', full_txt, re.IGNORECASE)
+                        if m and ftype.lower() not in seen_formats:
+                            price_lines.append(f"{ftype} - {m.group(1).strip()}")
+                            seen_formats.add(ftype.lower())
+
             except Exception as e:
                 print(f"Price extraction error: {e}")
-
-            # Fallback: if tmmSwatches gave nothing, try JS scan
-            if not price_lines:
-                try:
-                    js_prices = await page.evaluate("""() => {
-                        const results = [];
-                        const seen = new Set();
-                        const swatches = document.querySelectorAll(
-                            '#tmmSwatches .a-button-inner, .swatchElement .a-button-inner'
-                        );
-                        for (const sw of swatches) {
-                            const txt = (sw.innerText || '').trim();
-                            if (!txt) continue;
-                            const lines = txt.split('\\n').map(l => l.trim()).filter(Boolean);
-                            if (lines.length >= 2) {
-                                const fmt = lines[0];
-                                if (seen.has(fmt.toLowerCase())) continue;
-                                seen.add(fmt.toLowerCase());
-                                const price = lines.find(l => /[\\d,\\.]+/.test(l) && l !== fmt);
-                                if (fmt && price) results.push(fmt + ' - ' + price);
-                            }
-                        }
-                        return results;
-                    }""")
-                    if js_prices:
-                        price_lines = js_prices
-                except Exception:
-                    pass
 
             price_str = "\n".join(price_lines) if price_lines else "N/A"
 
@@ -1350,6 +1352,10 @@ class AuthorScraper:
         if not author_name or author_name == "N/A":
             return {}
 
+        # Handle Multiple Authors (e.g., "A + B")
+        authors = [a.strip() for a in re.split(r'\s*\+\s*|\s*\&\s*|\s+and\s+', str(author_name)) if a.strip()]
+        primary_author = authors[0] if authors else str(author_name)
+
         page = await context.new_page()
         details = {
             "Author_Email": "N/A",
@@ -1358,91 +1364,96 @@ class AuthorScraper:
             "Twitter": "N/A",
             "Instagram": "N/A",
             "Website": "N/A",
+            "Contact_Website": "N/A",
             "Other_Contact": "N/A"
         }
 
         try:
-            # Step 1: Find Official Website
-            print(f"  Author: Searching for '{author_name}' official website...")
-            search_query = f"{author_name} official website contact"
-            brave_url = f"https://search.brave.com/search?q={search_query.replace(' ', '+')}"
+            # Step 1: Find Official Website (Using DuckDuckGo for better bot resilience)
+            print(f"  Author: Searching for '{primary_author}' official website...")
+            search_query = f"{primary_author} author official website contact"
+            ddg_url = f"https://html.duckduckgo.com/html/?q={search_query.replace(' ', '+')}"
             
             website_url = None
             try:
-                await page.goto(brave_url, wait_until="domcontentloaded", timeout=30000)
-                # Look for results that likely point to a personal homepage
-                links = await page.query_selector_all('main a')
+                await page.goto(ddg_url, wait_until="domcontentloaded", timeout=45000)
+                await asyncio.sleep(2)
+                
+                # Look for results
+                links = await page.query_selector_all('.result__a')
                 for link in links:
+                    if page.is_closed(): break
                     href = await link.evaluate("el => el.href")
-                    if any(x in href for x in ['facebook.com', 'twitter.com', 'instagram.com', 'wikipedia.org', 'goodreads.com', 'amazon.com']):
+                    if any(x in href for x in ['facebook.com', 'twitter.com', 'instagram.com', 'wikipedia.org', 'goodreads.com', 'amazon.com', 'linkedin.com']):
                         continue
-                    if 'brave.com' in href:
+                    if 'brave.com' in href or 'search.yahoo.com' in href:
                         continue
                     
-                    # Heuristic: the first reasonable outside link is often the official site
                     website_url = href
                     print(f"  Author: Potential website found: {website_url}")
                     break
-            except Exception:
-                pass
-
-            if not website_url:
-                # Try DuckDuckGo fallback
-                print(f"  Author: DDG Fallback for website...")
-                ddg_url = f"https://html.duckduckgo.com/html/?q={search_query.replace(' ', '+')}"
-                try:
-                    await page.goto(ddg_url, wait_until="domcontentloaded", timeout=20000)
-                    top_link = await page.query_selector('.result__a')
-                    if top_link:
-                        website_url = await top_link.evaluate("el => el.href")
-                except Exception:
-                    pass
+            except Exception: pass
 
             if website_url:
                 details["Website"] = website_url
-                # Step 2: Scrape the website for socials and contact
+                details["Contact_Website"] = website_url # Default
+                
+                # Step 2: Scrape the website
                 await page.goto(website_url, wait_until="domcontentloaded", timeout=45000)
-                await asyncio.sleep(2) # JS Render
+                await asyncio.sleep(2)
+                
+                # Scroll to bottom to capture footers/lazy-loaded emails
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(1)
                 
                 content = await page.content()
                 
-                # Emails (Basic Regex)
-                emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', content)
-                if emails:
-                    # Heuristic: if 'agent' is near the email, it's an agent email
-                    unique_emails = list(set(emails))
-                    for email in unique_emails:
-                        if 'agent' in email.lower() or 'literary' in content.lower()[content.lower().find(email.lower())-50:content.lower().find(email.lower())+50]:
-                            details["Agent_Email"] = email
-                        elif details["Author_Email"] == "N/A":
-                            details["Author_Email"] = email
+                # Enhanced Email Extraction (handles [at] and (at) patterns)
+                def extract_emails(text):
+                    # Standard regex
+                    standard = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
+                    # Obfuscated patterns
+                    obfuscated = re.findall(r'[a-zA-Z0-9._%+-]+\s*[\[\(]\s*at\s*[\]\)]\s*[a-zA-Z0-9.-]+\s*[\[\(]\s*dot\s*[\]\)]\s*[a-zA-Z]{2,}', text, re.I)
+                    decoded = [e.replace(' [at] ', '@').replace(' (at) ', '@').replace(' [dot] ', '.').replace(' (dot) ', '.') for e in obfuscated]
+                    return list(set(standard + decoded))
 
-                # Social Links
+                emails = extract_emails(content)
+                
+                def classify_emails(found_emails, text_context):
+                    lower_context = text_context.lower()
+                    for email in set(found_emails):
+                        lower_email = email.lower()
+                        # Agency/Agent Indicators
+                        agent_keywords = ['agent', 'literary', 'representation', 'rights', 'press', 'publicist', 'media', 'inquiry']
+                        # Check proximity in text (rough check via index)
+                        email_idx = lower_context.find(lower_email)
+                        context_snippet = lower_context[max(0, email_idx-100):email_idx+100]
+                        
+                        if any(kw in lower_email for kw in ['agent', 'press', 'rights']) or any(kw in context_snippet for kw in agent_keywords):
+                            if details["Agent_Email"] == "N/A": details["Agent_Email"] = email
+                        # Personal Indicators
+                        else:
+                            if details["Author_Email"] == "N/A": details["Author_Email"] = email
+
+                classify_emails(emails, content)
+
+                # Socials
                 links = await page.query_selector_all('a[href]')
                 for link in links:
                     href = await link.evaluate("el => el.href")
-                    if 'facebook.com' in href and details["Facebook"] == "N/A":
-                        details["Facebook"] = href
-                    elif ('twitter.com' in href or 'x.com' in href) and details["Twitter"] == "N/A":
-                        details["Twitter"] = href
-                    elif 'instagram.com' in href and details["Instagram"] == "N/A":
-                        details["Instagram"] = href
+                    if 'facebook.com' in href and details["Facebook"] == "N/A": details["Facebook"] = href
+                    elif ('twitter.com' in href or 'x.com' in href) and details["Twitter"] == "N/A": details["Twitter"] = href
+                    elif 'instagram.com' in href and details["Instagram"] == "N/A": details["Instagram"] = href
                 
-                # Check for "Contact" page specifically
-                contact_link = await page.query_selector('a:has-text("Contact"), a:has-text("About")')
+                # Step 3: Targeted Contact Page
+                contact_link = await page.query_selector('a:has-text("Contact"), a:has-text("About"), a:has-text("Reach")')
                 if contact_link:
                     contact_url = await contact_link.evaluate("el => el.href")
+                    details["Contact_Website"] = contact_url
                     await page.goto(contact_url, wait_until="domcontentloaded", timeout=30000)
-                    contact_content = await page.content()
-                    
-                    # Re-scan for emails on contact page
-                    c_emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', contact_content)
-                    if c_emails:
-                        for email in set(c_emails):
-                            if 'agent' in email.lower() or 'press' in email.lower():
-                                details["Agent_Email"] = email
-                            elif details["Author_Email"] == "N/A":
-                                details["Author_Email"] = email
+                    c_content = await page.content()
+                    c_emails = extract_emails(c_content)
+                    classify_emails(c_emails, c_content)
 
             return details
         except Exception as e:
