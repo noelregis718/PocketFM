@@ -9,10 +9,10 @@ from playwright.async_api import async_playwright
 
 # Configuration
 STATE_FILE = r"e:\Internship\PocketFM\backend\keyword_state.json"
-OUTPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Romantasy.xlsx"
+OUTPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Werewolves & Shifters.xlsx"
 BATCH_SIZE = 50
 MAX_TABS = 8
-SEARCH_URL = "https://www.amazon.com/s?k=Romantasy&i=stripbooks&crid=3JGEQS9FA3ITT&sprefix=romantasy%2Cstripbooks%2C376&ref=nb_sb_noss_1"
+SEARCH_URL = "https://www.amazon.com/s?k=Werewolves+%26+Shifters&i=stripbooks&crid=1VFS1NEXMRVWD&sprefix=werewolves+%26+shifters%2Cstripbooks%2C432&ref=nb_sb_noss_1"
 
 COLUMNS = [
     "Sub_Genre", "Price_Tier", "Amazon URL", "Book Title", "Book Number in Series",

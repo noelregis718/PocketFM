@@ -1,0 +1,56 @@
+# Goodreads Sign in
+
+
+#### Please Enable Cookies to Continue
+
+#### Passkey error
+Something went wrong, please sign-in another way or follow any instructions provided by your device.
+Sorry, your passkey isn't working. There might be a problem with the server. Sign in with your password or try your passkey again later.
+
+# Sign in
+[Password assistance](https://www.goodreads.com/ap/forgotpassword?showRememberMe=true&openid.pape.max_auth_age=0&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&siteState=eyJyZXR1cm5fdXJsIjoiaHR0cHM6Ly93d3cuZ29vZHJlYWRzLmNvbS8ifQ%3D%3D&language=en_US&pageId=amzn_goodreads_web_na&openid.return_to=https%3A%2F%2Fwww.goodreads.com%2Fap-handler%2Fsign-in&prevRID=659T5Y1WRHT2WM3XFSS0&openid.assoc_handle=amzn_goodreads_web_na&openid.mode=checkid_setup&prepopulatedLoginId=&failedSignInCount=0&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0)
+[Terms of Service](https://www.goodreads.com/about/terms)
+[Privacy Policy](https://www.goodreads.com/about/privacy)
+[Details](javascript:void(0))
+
+##### New to Goodreads?
+[Sign up](https://www.goodreads.com/ap/register?showRememberMe=true&openid.pape.max_auth_age=0&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&siteState=eyJyZXR1cm5fdXJsIjoiaHR0cHM6Ly93d3cuZ29vZHJlYWRzLmNvbS8ifQ%3D%3D&language=en_US&pageId=amzn_goodreads_web_na&openid.return_to=https%3A%2F%2Fwww.goodreads.com%2Fap-handler%2Fsign-in&prevRID=659T5Y1WRHT2WM3XFSS0&openid.assoc_handle=amzn_goodreads_web_na&openid.mode=checkid_setup&prepopulatedLoginId=&failedSignInCount=0&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0)
+- 
+        
+          
+            
+          
+
+          
+        
+
+        [Terms of Service](https://www.goodreads.com/about/terms)
+        
+      
+- 
+        
+          
+            
+          
+
+          
+        
+
+        [Privacy](https://www.goodreads.com/about/privacy)
+        
+      
+- 
+        
+          
+            
+          
+
+          
+        
+
+        [Help](https://www.goodreads.com/help)
+        
+      
+[Terms of Service](https://www.goodreads.com/about/terms)
+[Privacy](https://www.goodreads.com/about/privacy)
+[Help](https://www.goodreads.com/help)

@@ -19,9 +19,9 @@ from excel_utility import save_to_excel
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_FILE = r"e:\Internship\PocketFM\Amazon Keyword - Fantasy Romance.xlsx"
-OUTPUT_FILE = r"e:\Internship\PocketFM\Amazon Keyword - Fantasy Romance.xlsx"
-START_EXCEL_ROW = 999  # Start of today's scraping
+INPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Romantasy.xlsx"
+OUTPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Romantasy.xlsx"
+START_EXCEL_ROW = 998  # Start of today's scraping (~Row 1000 in Excel)
 MAX_CONCURRENT_TABS = 12
 BATCH_LIMIT = 5000         # Sweep everything till the end
 

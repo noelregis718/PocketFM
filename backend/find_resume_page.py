@@ -9,8 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scraper import AmazonScraper
 
 async def find_resume_point():
-    TARGET_COUNT = 1084  # Number of books in the Excel
-    SEARCH_URL = "https://www.amazon.com/s?k=Romantasy&i=stripbooks&crid=3JGEQS9FA3ITT&sprefix=romantasy%2Cstripbooks%2C376&ref=nb_sb_noss_1"
+    TARGET_COUNT = 1093  # Number of books in the Excel
+    SEARCH_URL = "https://www.amazon.com/s?k=Werewolves+%26+Shifters&i=stripbooks&crid=1VFS1NEXMRVWD&sprefix=werewolves+%26+shifters%2Cstripbooks%2C432&ref=nb_sb_noss_1"
     
     print(f"============================================================")
     print(f"RESUME POINT DISCOVERY MISSION")
@@ -21,7 +21,7 @@ async def find_resume_point():
     async with async_playwright() as p:
         # Using non-headless to ensure stability and user visibility
         browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        context = await browser.new_context()
         page = await context.new_page()
         
         amz = AmazonScraper()
@@ -37,8 +37,8 @@ async def find_resume_point():
         
         total_found_global = 0
         
-        # 2. Iterate and Count
-        for p_num in range(1, 401):
+        # 2. Iterate and Count (Starting from Page 15 as requested)
+        for p_num in range(15, 401):
             url = f"{SEARCH_URL}&page={p_num}"
             print(f"\n[Page {p_num}] Navigating to search results...")
             
@@ -47,8 +47,31 @@ async def find_resume_point():
                 # Wait for results to settle
                 await asyncio.sleep(4)
                 
-                # Fast Scroll to reveal all lazy-loaded books
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                # Verify we are not on a CAPTCHA page
+                title = await page.title()
+                print(f"  [Debug] Page Title: '{title}'")
+                if "Sorry! Something went wrong" in title or "Robot Check" in title:
+                    print("  [ALERT] CAPTCHA detected! Please solve it in the browser window.")
+                    for i in range(300, 0, -10):
+                        new_title = await page.title()
+                        if "Sorry! Something went wrong" not in new_title and "Robot Check" not in new_title:
+                            print("  [ALERT] CAPTCHA solved! Resuming...")
+                            break
+                        print(f"  Waiting for solve... {i}s remaining")
+                        await asyncio.sleep(10)
+                        
+                if "Spend less" in title or "Smile more" in title:
+                    print("  [ALERT] Amazon Dog Page (Error) detected! Waiting 10s and retrying...")
+                    await asyncio.sleep(10)
+                    await page.reload()
+                    await asyncio.sleep(5)
+                    title = await page.title()
+                        
+                # Fast Scroll to reveal all lazy-loaded books safely
+                try:
+                    await page.evaluate("if(document.body) window.scrollTo(0, document.body.scrollHeight)")
+                except Exception as e:
+                    print(f"  [Warning] Could not scroll page: {e}")
                 await asyncio.sleep(2)
 
                 # Find all book items with ASINs

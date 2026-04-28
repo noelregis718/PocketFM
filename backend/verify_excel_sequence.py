@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scraper import AmazonScraper
 
 async def verify_sequence():
-    INPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Romantasy.xlsx"
-    SEARCH_URL = "https://www.amazon.com/s?k=Romantasy&i=stripbooks&crid=3JGEQS9FA3ITT&sprefix=romantasy%2Cstripbooks%2C376&ref=nb_sb_noss_1"
+    INPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - paranormal Romance.xlsx"
+    SEARCH_URL = "https://www.amazon.com/s?k=Paranormal+Romance&i=stripbooks&crid=2MOWCGE10UUZ2&sprefix=paranormal+romance%2Cstripbooks%2C349&ref=nb_sb_noss_1"
     
     print(f"Loading Excel...")
     df = pd.read_excel(INPUT_FILE)
