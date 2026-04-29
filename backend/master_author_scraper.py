@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scraper import AuthorScraper
 
 # Configuration
-MASTER_FILE = r"E:\Internship\PocketFM\Romantasy _ Self Publication Master.xlsx"
+MASTER_FILE = r"E:\Internship\PocketFM\Romantasy _ Self Publication Master (1).xlsx"
 OUTPUT_FILE = r"E:\Internship\PocketFM\Master_Author_Enrichment.xlsx"
 SHEET_NAME = "Picks for Licensing"
 HEADER_ROW = 2  # Row 2 in Excel
@@ -20,7 +20,7 @@ EMAIL_COL_NAME = "Author Email ID"
 WEBSITE_COL_NAME = "Author Contact Form - Website"
 AGENCY_COL_NAME = "Agency Email ID"
 
-MAX_CONCURRENT_TABS = 10
+MAX_CONCURRENT_TABS = 5
 BATCH_SIZE = 20
 
 async def process_author(context, author_name, author_scraper):
@@ -63,6 +63,7 @@ async def run_master_author_mission():
 
     print(f"Locked onto: {total_to_enrich} authors for this mission batch.")
     
+    author_scraper = AuthorScraper()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_TABS)
 
     async def sem_process(idx, delay):
@@ -82,7 +83,7 @@ async def run_master_author_mission():
                 print(f"  [Error] {author_name}: {e}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
         )

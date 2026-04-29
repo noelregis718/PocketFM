@@ -12,7 +12,7 @@ STATE_FILE = r"e:\Internship\PocketFM\backend\keyword_state.json"
 OUTPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Werewolves & Shifters.xlsx"
 BATCH_SIZE = 50
 MAX_TABS = 8
-SEARCH_URL = "https://www.amazon.com/s?k=Werewolves+%26+Shifters&i=stripbooks&crid=1VFS1NEXMRVWD&sprefix=werewolves+%26+shifters%2Cstripbooks%2C432&ref=nb_sb_noss_1"
+SEARCH_URL = "https://www.amazon.com/s?k=Werewolf+Romance&i=stripbooks&crid=1GASFKR08HQRE&sprefix=werewolf+romance%2Cstripbooks%2C330&ref=nb_sb_noss_1"
 
 COLUMNS = [
     "Sub_Genre", "Price_Tier", "Amazon URL", "Book Title", "Book Number in Series",
@@ -157,8 +157,9 @@ async def _run_keyword_mission_core():
     print(f"Current Progress: {state['total_processed_global']} | Starting from Page {state['last_page_scanned'] + 1}", flush=True)
     print(f"{'='*60}\n", flush=True)
 
-    # --- GLOBAL ASIN PROTECTION ---
+    # --- GLOBAL TITLE & ASIN PROTECTION ---
     global_seen_asins = set()
+    global_seen_titles = set()
     if os.path.exists(OUTPUT_FILE):
         try:
             existing_df = pd.read_excel(OUTPUT_FILE)
@@ -167,7 +168,10 @@ async def _run_keyword_mission_core():
                 for url in existing_df['Amazon URL'].dropna():
                     match = re.search(r'/(?:dp|product|gp/product)/([A-Z0-9]{10})', str(url))
                     if match: global_seen_asins.add(match.group(1))
-            print(f"  [Protection] Loaded {len(global_seen_asins)} existing ASINs to prevent duplicates.")
+            if 'Book Title' in existing_df.columns:
+                for t in existing_df['Book Title'].dropna():
+                    global_seen_titles.add(normalize_title_for_search(str(t)))
+            print(f"  [Protection] Loaded {len(global_seen_asins)} ASINs and {len(global_seen_titles)} titles to prevent duplicates.")
         except Exception as e:
             print(f"  [Protection] Warning: Could not load existing data: {e}")
 
@@ -279,6 +283,7 @@ async def _run_keyword_mission_core():
                             except: continue
                         
                         clean_title = normalize_title_for_search(title)
+                        if clean_title in global_seen_titles: continue # Global Title Protection
                         if clean_title in seen_titles: continue
 
                         href = None
