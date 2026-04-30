@@ -9,10 +9,10 @@ from playwright.async_api import async_playwright
 
 # Configuration
 STATE_FILE = r"e:\Internship\PocketFM\backend\keyword_state.json"
-OUTPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Werewolves & Shifters.xlsx"
+OUTPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Paranormal Romance.xlsx"
 BATCH_SIZE = 50
 MAX_TABS = 8
-SEARCH_URL = "https://www.amazon.com/s?k=Werewolf+Romance&i=stripbooks&crid=1GASFKR08HQRE&sprefix=werewolf+romance%2Cstripbooks%2C330&ref=nb_sb_noss_1"
+SEARCH_URL = "https://www.amazon.com/s?k=Fated+Mates+Paranormal+Romance&i=stripbooks&crid=2DGEYER9D1OQ&sprefix=fated+mates+paranormal+romance%2Cstripbooks%2C2204&ref=nb_sb_noss_2"
 
 COLUMNS = [
     "Sub_Genre", "Price_Tier", "Amazon URL", "Book Title", "Book Number in Series",
@@ -149,8 +149,8 @@ LOCK_FILE = r"e:\Internship\PocketFM\keyword_scraper.lock"
 
 async def _run_keyword_mission_core():
     state = load_state()
-    # MISSION TARGET: Scale by another 500 titles
-    MISSION_TARGET = state['total_processed_global'] + 50
+    # MISSION TARGET: Scale to 3005 titles (final goal 3000+)
+    MISSION_TARGET = 3005
     
     print(f"\n{'='*60}", flush=True)
     print(f"INDUSTRIAL SCALING MISSION: Target {MISSION_TARGET} Titles", flush=True)

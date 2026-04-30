@@ -13,10 +13,10 @@ from excel_utility import save_to_excel
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Romantasy.xlsx"
-OUTPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Romantasy.xlsx"
+INPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Werewolves & Shifters.xlsx"
+OUTPUT_FILE = r"E:\Internship\PocketFM\Amazon Keyword - Werewolves & Shifters.xlsx"
 MAX_CONCURRENT_TABS = 8
-BATCH_LIMIT = 5000  # Sweep everything till the end
+BATCH_LIMIT = 500  # Process 500 at a time
 
 def needs_pricing_repair(val):
     """Detect if pricing needs fix: N/A, empty, or INR/₹."""
@@ -45,7 +45,7 @@ async def repair_amazon_pricing():
     to_repair_mask = df['Price_Tier'].apply(needs_pricing_repair)
     
     # Range limit: Focus on titles from 1000 onwards
-    START_ROW = 1000
+    START_ROW = 1
     range_mask = df.index >= (START_ROW - 2)
     to_repair_indices = df.index[to_repair_mask & range_mask][:BATCH_LIMIT]
     
