@@ -1,4 +1,5 @@
 import asyncio
+import random
 import re
 import os
 import openpyxl
@@ -58,7 +59,7 @@ async def search_book_on_goodreads(page, title, author):
     print(f"    Searching Goodreads: {search_url}")
     try:
         await page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(2)
+        await asyncio.sleep(random.uniform(1.5, 3.5))
         await solve_captcha_if_present(page, search_url)
         
         first_result = await page.query_selector('a.bookTitle')
@@ -78,7 +79,7 @@ async def search_book_on_goodreads(page, title, author):
 async def get_book_details(page, url):
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(random.uniform(1.0, 3.0))
         await solve_captcha_if_present(page, url)
         
         content = await page.content()
@@ -118,7 +119,7 @@ async def get_book_details(page, url):
 async def get_series_pages(page, url, row_idx, global_state, state_lock, global_stop_event):
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(2)
+        await asyncio.sleep(random.uniform(1.5, 3.5))
         await solve_captcha_if_present(page, url)
         
         book_links = await page.query_selector_all('.listWithDividers__item a.bookTitle, .listWithDividers__item a[href*="/book/show/"]')
