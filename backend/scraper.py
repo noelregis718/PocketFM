@@ -356,6 +356,47 @@ class AmazonScraper:
             print(f"  [Critical] Discovery Error: {e}")
             return []
 
+    async def get_book1_details(self, context, series_name, author_name):
+        if not series_name or series_name == "N/A": return None
+        
+        from urllib.parse import quote
+        a_name = author_name if author_name != "N/A" else ""
+        query = quote(f"{series_name} book 1 {a_name}")
+        search_url = f"https://www.amazon.com/s?k={query}"
+        
+        page = await context.new_page()
+        print(f"    -> [Fallback] Searching Book 1 for series: {series_name}", flush=True)
+        try:
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(2)
+            
+            href = None
+            for i in range(3):
+                await page.evaluate("window.scrollBy(0, 1000)")
+                await asyncio.sleep(1)
+                
+            items = await page.query_selector_all("div[data-asin]")
+            for item in items:
+                asin = await item.get_attribute('data-asin')
+                if not asin or len(asin) < 5: continue
+                l_el = await item.query_selector("h2 a")
+                if l_el:
+                    h = await l_el.evaluate("el => el.href")
+                    if h and "/dp/" in h: 
+                        href = h
+                        break
+            
+            await page.close()
+            
+            if href:
+                print(f"    -> [Fallback] Found Book 1 link, scraping...", flush=True)
+                return await self.scrape_product_details_tab(context, href)
+        except Exception as e:
+            print(f"    -> [Fallback] Error: {e}", flush=True)
+            try: await page.close()
+            except: pass
+        return None
+
     async def scrape_product_details_tab(self, context, url, base_url="https://www.amazon.com"):
         if not url:
             return {
@@ -681,6 +722,7 @@ class AmazonScraper:
             # ====== AMAZON STARS AND RATINGS ======
             rating = "N/A"
             reviews = "N/A"
+            actual_reviews = "N/A"
             try:
                 # Stars
                 star_el = await page.query_selector('#acrPopoverTitle, [data-hook="rating-out-of-text"], .a-icon-star span')
@@ -697,6 +739,27 @@ class AmazonScraper:
                     # Format: "1,234 ratings" -> "1234"
                     m = re.search(r'([\d,]+)', review_text)
                     if m: reviews = m.group(1).replace(',', '')
+                    
+                # Aggressive fallback for review count
+                if reviews == "N/A":
+                    try:
+                        rev_scan = await page.evaluate("""() => {
+                            const elements = document.querySelectorAll('span.a-size-base, a.a-link-normal');
+                            for (const el of elements) {
+                                const text = (el.textContent || '').trim().toLowerCase();
+                                if (text.includes('ratings') || text.includes('reviews')) {
+                                    const match = text.match(/([\\d,]+)\\s*(?:ratings|reviews)/);
+                                    if (match && match[1]) {
+                                        return match[1].replace(/,/g, '');
+                                    }
+                                }
+                            }
+                            return "N/A";
+                        }""")
+                        if rev_scan != "N/A":
+                            reviews = rev_scan
+                    except Exception:
+                        pass
             except Exception as e:
                 print(f"Rating extraction error: {e}")
 
@@ -708,18 +771,59 @@ class AmazonScraper:
             inner_rank = "N/A"
 
             try:
-                # 1. Series info (e.g., "Book 1 of 3: ...")
-                series_el = await page.query_selector('#seriesBulletWidget_feature_div, #bookSeries_feature_div, .series-link')
+                # Strategy 1: Title parsing
+                raw_title_el = await page.query_selector('#productTitle')
+                raw_title = clean_text(await raw_title_el.inner_text()) if raw_title_el else ""
+                
+                if raw_title:
+                    m = re.search(r'\((.*?)(?:\s+#?\d+|\s+Book\s+\d+)?\)', raw_title, re.IGNORECASE)
+                    if m:
+                        s_name = re.sub(r'[\s#]+$', '', m.group(1).strip())
+                        if len(s_name) > 2 and 'edition' not in s_name.lower():
+                            series_name = s_name
+                    m2 = re.search(r'Book\s+(\d+)', raw_title, re.IGNORECASE)
+                    if m2: book_number = m2.group(1)
+
+                # Strategy 2: Parse standard series block text
+                series_el = await page.query_selector('#seriesBulletWidget_feature_div, #bookSeries_feature_div')
                 if series_el:
                     series_text = clean_text(await series_el.inner_text())
+                    
                     m = re.search(r'Book\s+(\d+)\s+of\s+(\d+)\s*:\s*(.+)', series_text, re.IGNORECASE)
                     if m:
                         book_number = m.group(1).strip()
                         total_books_in_series = m.group(2).strip()
                         series_name = m.group(3).strip()
                     else:
+                        m3 = re.search(r'Book\s+(\d+)\s+of\s*:\s*(.+)', series_text, re.IGNORECASE)
+                        if m3:
+                            book_number = m3.group(1).strip()
+                            series_name = m3.group(2).strip()
+                        
                         m2 = re.search(r'Part\s+of\s*:\s*(.+)', series_text, re.IGNORECASE)
-                        if m2: series_name = m2.group(1).strip()
+                        if m2 and series_name == "N/A": 
+                            series_name = m2.group(1).strip()
+                            
+                # Strategy 3: Scan for all series links
+                if series_name == "N/A" or "book" in series_name.lower():
+                    series_links = await page.query_selector_all('a[href*="/series/"], .series-link')
+                    for link in series_links:
+                        txt = clean_text(await link.inner_text())
+                        if txt and len(txt) > 2 and "visit amazon's" not in txt.lower():
+                            series_name = txt
+                            break
+
+                # Strategy 4: Deep DOM string matching
+                if series_name == "N/A":
+                    all_spans = await page.query_selector_all('span')
+                    for span in all_spans:
+                        txt = clean_text(await span.inner_text())
+                        if 'Book' in txt and 'of' in txt and ':' in txt and len(txt) < 100:
+                            m = re.search(r'Book\s+(\d+)\s+of\s+\d*\s*:\s*(.+)', txt, re.IGNORECASE)
+                            if m:
+                                book_number = m.group(1).strip()
+                                series_name = m.group(2).strip()
+                                break
 
                 # 2. Pages (Print length)
                 for page_sel in ['#detailBullets_feature_div li', '#rpiTable tr', '.rpi-attribute-value']:
@@ -743,6 +847,68 @@ class AmazonScraper:
             except Exception as e:
                 print(f"Detail enrichment error: {e}")
 
+            # ====== THE ULTIMATE AGGRESSIVE REGEX FALLBACK ======
+            try:
+                full_text = await page.evaluate("() => document.body.innerText")
+                # 1. Total books in series
+                if total_books_in_series == "N/A":
+                    # Look for "Book X of Y [junk] Series Name"
+                    m = re.search(r'Book\s+(\d+)\s+of\s+(\d+)[\s\S]{1,50}?([A-Za-z0-9\s,&.-]+?)(?=\n|Print|Language|Previous)', full_text, re.IGNORECASE)
+                    if m: 
+                        if book_number == "N/A": book_number = m.group(1)
+                        total_books_in_series = m.group(2)
+                        if series_name == "N/A": series_name = m.group(3).strip()
+                
+                # 2. Publisher
+                if publisher == "N/A":
+                    m = re.search(r'Publisher[\s\S]{1,40}?([A-Za-z0-9\s,&.-]+?)(?:\n|\(|;)', full_text, re.IGNORECASE)
+                    if m: publisher = m.group(1).strip()
+                    elif re.search(r'Independently published', full_text, re.IGNORECASE):
+                        publisher = "Independently published"
+                
+                # 3. Publication Date
+                if pub_date == "N/A":
+                    m = re.search(r'(?:Publication date|Release date)[\s\S]{1,40}?([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})', full_text, re.IGNORECASE)
+                    if m: pub_date = m.group(1).strip()
+                
+                # 4. Pages (or Audiobook Length)
+                if pages == "N/A":
+                    m = re.search(r'(?:Print length|Length|Listening Length)[\s\S]{1,40}?(\d+(?:\.\d+)?)\s*(?:pages|hours|minutes|hrs|mins)', full_text, re.IGNORECASE)
+                    if m: pages = m.group(1).strip()
+                
+                # 5. Amazon Stars
+                if rating == "N/A":
+                    m = re.search(r'([\d.]+)\s*out of 5 stars', full_text, re.IGNORECASE)
+                    if m: rating = m.group(1).strip()
+                
+                # 6. Amazon Ratings (Reviews)
+                if reviews == "N/A":
+                    m = re.search(r'([\d,]+)\s*ratings', full_text, re.IGNORECASE)
+                    if m: reviews = m.group(1).replace(',', '').strip()
+                
+                # 6.5. Actual Reviews (Text Reviews)
+                if actual_reviews == "N/A":
+                    m = re.search(r'([\d,]+)\s*(?:global\s+)?reviews', full_text, re.IGNORECASE)
+                    if m: actual_reviews = m.group(1).replace(',', '').strip()
+                
+                # 7. Best Sellers Rank
+                if inner_rank == "N/A":
+                    rank_matches = re.findall(r'#[\d,]+\s+in\s+[^\n]+', full_text)
+                    if rank_matches:
+                        inner_rank = " | ".join(rank_matches[:3])
+                        
+                # 8. Logline / Description Fallback
+                # If desc wasn't picked up by standard selectors, grab a chunk of text that looks like a story summary
+                desc = locals().get('description', "N/A")
+                if desc == "N/A" or len(desc) < 20:
+                    # Look for paragraph-style text
+                    m = re.search(r'\n([A-Z][\s\S]{200,1500}?)(?:\n\n|\n[A-Z][a-z]+(?:\s[A-Z][a-z]+)?\n|Read less|Read more)', full_text)
+                    if m: desc = m.group(1).strip()
+                # Update locals description so it carries over
+                locals()['description'] = desc
+            except Exception as e:
+                print(f"Fallback regex error: {e}")
+
             # Final cleanup: strip any leading colons, spaces, Unicode markers from all values
             publisher = re.sub(r'^[\s:;\u200e\u200f\u200b]+', '', publisher).strip() if publisher != "N/A" else "N/A"
             pub_date = re.sub(r'^[\s:;\u200e\u200f\u200b]+', '', pub_date).strip() if pub_date != "N/A" else "N/A"
@@ -758,6 +924,7 @@ class AmazonScraper:
                 "Price":            price_str,
                 "Rating":           rating,
                 "Number of Reviews": reviews,
+                "Actual Reviews":   actual_reviews,
                 "Amazon URL":       page.url,
                 "Series Name":      series_name,
                 "Book Number":      book_number,
@@ -769,7 +936,7 @@ class AmazonScraper:
             print(f"Error scraping {url}: {e}")
             return {
                 "Description": "N/A", "Publisher": "N/A", "Publication Date": "N/A", 
-                "Author Name": "N/A", "Price": "N/A", "Rating": "N/A", "Number of Reviews": "N/A",
+                "Author Name": "N/A", "Price": "N/A", "Rating": "N/A", "Number of Reviews": "N/A", "Actual Reviews": "N/A",
                 "Series Name": "N/A",
                 "Book Number": "N/A", "Total Books": "N/A", "Pages": "N/A", "Inner Rank": "N/A"
             }
