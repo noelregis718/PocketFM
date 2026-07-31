@@ -1,58 +1,49 @@
 import pandas as pd
-import sys
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Font, Border, Side
+from openpyxl.utils import get_column_letter
 
-def main():
-    file_path = 'books_authors.xlsx'
+EXCEL_FILE = r"e:\Internship\PocketFM\noel_part1.xlsx"
+
+def apply_styling(excel_file=EXCEL_FILE):
+    print(f"Applying styling and wrapping to {excel_file}...")
     try:
-        df = pd.read_excel(file_path)
+        wb = load_workbook(excel_file)
+        
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            
+            # Freeze the top row so headers stay visible when scrolling
+            ws.freeze_panes = "A2"
+            
+            for col_idx, col in enumerate(ws.columns, 1):
+                col_letter = get_column_letter(col_idx)
+                
+                # Make header bold
+                header_cell = ws[f"{col_letter}1"]
+                header_cell.font = Font(bold=True)
+                
+                # Set a wider standard width for readability
+                ws.column_dimensions[col_letter].width = 35
+                
+            
+            thin_border = Border(left=Side(style='thin'), 
+                                 right=Side(style='thin'), 
+                                 top=Side(style='thin'), 
+                                 bottom=Side(style='thin'))
+                                 
+            # Apply wrapping, top-alignment, and thin borders to all cells
+            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+                # Lock row height to a thin size so it doesn't get massive from wrapping
+                ws.row_dimensions[row[0].row].height = 20
+                for cell in row:
+                    cell.alignment = Alignment(wrap_text=True, vertical='top')
+                    cell.border = thin_border
+
+        wb.save(excel_file)
+        print(f"Styling applied successfully! You can now open {excel_file}.")
     except Exception as e:
-        print(f"Error reading {file_path}: {e}")
-        sys.exit(1)
-
-    requested_columns = [
-        "Name of Series",
-        "Author Name",
-        "Publisher",
-        "GoodReads series link",
-        "Number of PRIMARY books in the series",
-        "Rating (out of 5) of Primary Book 1",
-        "Ratings (#) of Primary Book 1",
-        "Synopsis (if available)",
-        "Romantasy = Yes or No?",
-        "Romantasy Sub-Genre of series",
-        "Name of agent"
-    ]
-
-    new_columns = []
-    
-    # We will build the new column order.
-    # Put 'Book Title' right after 'Author Name' to preserve it logically
-    for col in requested_columns:
-        new_columns.append(col)
-        if col == "Author Name":
-            if "Book Title" in df.columns:
-                new_columns.append("Book Title")
-
-    # Add any other existing columns that aren't already included
-    for col in df.columns:
-        if col not in new_columns:
-            new_columns.append(col)
-
-    # For any new column, initialize it with empty string
-    for col in new_columns:
-        if col not in df.columns:
-            df[col] = ""
-
-    # Reorder
-    df = df[new_columns]
-
-    # Save
-    try:
-        df.to_excel(file_path, index=False)
-        print("Successfully formatted the excel file!")
-    except Exception as e:
-        print(f"Error saving {file_path}: {e}")
-        sys.exit(1)
+        print(f"Error styling excel: {e}")
 
 if __name__ == "__main__":
-    main()
+    apply_styling()
