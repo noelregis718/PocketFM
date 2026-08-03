@@ -3,7 +3,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, Border, Side
 from openpyxl.utils import get_column_letter
 
-EXCEL_FILE = r"e:\Internship\PocketFM\noel_part1.xlsx"
+EXCEL_FILE = r"e:\Internship\PocketFM\noel_part2.xlsx"
 
 def apply_styling(excel_file=EXCEL_FILE):
     print(f"Applying styling and wrapping to {excel_file}...")

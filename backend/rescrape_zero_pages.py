@@ -8,9 +8,9 @@ import json
 from playwright.async_api import async_playwright
 import format_excel
 
-EXCEL_FILE = r"e:\Internship\PocketFM\vanshika_part2.xlsx"
-START_ROW = 1750
-TARGET_ROWS = 2150
+EXCEL_FILE = r"e:\Internship\PocketFM\vanshika_part1.xlsx"
+START_ROW = 0
+TARGET_ROWS = 2500
 CONCURRENCY = 5
 BATCH_SIZE = 50
 
@@ -51,16 +51,8 @@ async def process_row(index, row, df, context, sem):
         if not book_name or book_name.lower() == 'nan':
             return
             
-        existing_val = str(row.get("GoodReads_Series_URL", "")).strip()
-        num_books = row.get("Num_Primary_Books_in_Series")
         num_pages = row.get("Total_Page_Count_of_Primary_Books")
-        
-        has_url = existing_val and existing_val.lower() != 'nan' and existing_val != 'none'
-        has_books = str(num_books) != '0' and str(num_books) != '0.0' and pd.notna(num_books)
-        has_pages = str(num_pages) != '0' and str(num_pages) != '0.0' and pd.notna(num_pages)
-        
-        if has_url and has_books and has_pages:
-            print(f"[{index}] Row is fully complete (URL, Books, Pages). Skipping.")
+        if str(num_pages) != '0' and str(num_pages) != '0.0' and pd.notna(num_pages):
             return
 
         print(f"\n--- Processing Row {index + 1} ---")
@@ -364,24 +356,16 @@ async def run_scraper():
         print(f"STARTING BATCH {batch_start} to {batch_end} (Cooldown Architecture)")
         print(f"=======================================================\n")
         
-        # Fast-forward check: skip launching browser if the whole batch is fully completed
+        # Rescrape Zero Pages Check
         needs_processing = False
         for i in range(batch_start, batch_end):
-            row = df.iloc[i]
-            existing_val = str(row.get("GoodReads_Series_URL", "")).strip()
-            num_books = row.get("Num_Primary_Books_in_Series")
-            num_pages = row.get("Total_Page_Count_of_Primary_Books")
-            
-            has_url = existing_val and existing_val.lower() != 'nan' and existing_val != 'none'
-            has_books = str(num_books) != '0' and str(num_books) != '0.0' and pd.notna(num_books)
-            has_pages = str(num_pages) != '0' and str(num_pages) != '0.0' and pd.notna(num_pages)
-            
-            if not (has_url and has_books and has_pages):
+            num_pages = df.iloc[i].get("Total_Page_Count_of_Primary_Books")
+            if str(num_pages) == '0' or str(num_pages) == '0.0' or pd.isna(num_pages):
                 needs_processing = True
                 break
                 
         if not needs_processing:
-            print(f"Entire batch {batch_start}-{batch_end} is already fully complete. Skipping.")
+            print(f"Entire batch {batch_start}-{batch_end} has no zero pages to re-scrape. Skipping.")
             continue
 
         async with async_playwright() as p:

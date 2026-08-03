@@ -67,13 +67,12 @@ Fantasy · High Fantasy · Epic Fantasy · Urban Fantasy · Paranormal · Supern
 
 ### Genre match classification
 
-**A — Strong Match:** A combined category (Romantasy, Fantasy Romance, Romantic Fantasy, Paranormal Romance) appears in top 5 GR genres; OR at least one romance-family tag AND one fantasy-family tag both appear in top 5. → Proceed to synopsis confirmation.
+First, check if both a **Fantasy** and **Romance** element exist. If no fantasy/romance element is present, classify as **Fail**. Then, check the priority of the tags/keywords:
 
-**B — Confirmed Match:** Romance and fantasy both appear within top 10 GR genres; at least one in top 5; synopsis clearly confirms both. → Proceed to direct-fail gates.
-
-**C — Weak or One-Sided Match:** Fantasy strongly tagged but romance missing/low-ranked, OR romance strongly tagged but fantasy missing/low-ranked, OR both appear only in lower positions. → May proceed ONLY if: (1) synopsis clearly establishes the weak/missing element, AND (2) at least 3 independent meaningful reviews confirm it as substantial. If met: **Confirmed by Secondary Evidence**. If not met: **DF-0**.
-
-**D — Tags Unavailable:** Mark genre-tag field as No data. Require synopsis + ≥ 3 meaningful reviews to confirm both substantial romance and genuine fantasy. If confirmed: **Confirmed by Secondary Evidence**. If incomplete/contradictory: **Subjective Review — SR-E3**. If evidence clearly shows either is absent: **Direct Fail**.
+- **Strong Match:** Both fantasy and romance genre tags / internal keywords appear in the **Top 5** priority positions.
+- **Confirmed Match:** Both fantasy and romance genre tags / internal keywords appear within the **next 4** positions (ranks 6 through 9).
+- **Weak Match:** Both fantasy and romance genre tags / internal keywords appear in **rank 10 or beyond** ("Any other keyword").
+- **Downgrade Rule:** Regardless of tag rank, if the number of books in the series (`Num_Primary_Books_in_Series`) is **less than 3**, automatically classify as a **Weak Match**.
 
 ### DF-0 — No Credible Romantasy Genre Match
 

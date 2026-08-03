@@ -8,9 +8,9 @@ import json
 from playwright.async_api import async_playwright
 import format_excel
 
-EXCEL_FILE = r"e:\Internship\PocketFM\vanshika_part2.xlsx"
-START_ROW = 1750
-TARGET_ROWS = 2150
+EXCEL_FILE = r"e:\Internship\PocketFM\noel_part1.xlsx"
+START_ROW = 0
+TARGET_ROWS = 2400
 CONCURRENCY = 5
 BATCH_SIZE = 50
 
@@ -51,16 +51,11 @@ async def process_row(index, row, df, context, sem):
         if not book_name or book_name.lower() == 'nan':
             return
             
-        existing_val = str(row.get("GoodReads_Series_URL", "")).strip()
         num_books = row.get("Num_Primary_Books_in_Series")
-        num_pages = row.get("Total_Page_Count_of_Primary_Books")
+        is_zero_books = pd.notna(num_books) and (str(num_books).strip() == '0' or num_books == 0 or num_books == 0.0)
         
-        has_url = existing_val and existing_val.lower() != 'nan' and existing_val != 'none'
-        has_books = str(num_books) != '0' and str(num_books) != '0.0' and pd.notna(num_books)
-        has_pages = str(num_pages) != '0' and str(num_pages) != '0.0' and pd.notna(num_pages)
-        
-        if has_url and has_books and has_pages:
-            print(f"[{index}] Row is fully complete (URL, Books, Pages). Skipping.")
+        if not is_zero_books:
+            print(f"[{index}] Not a 0-book row. Skipping.")
             return
 
         print(f"\n--- Processing Row {index + 1} ---")
@@ -149,7 +144,39 @@ async def process_row(index, row, df, context, sem):
             df.at[index, "Book1_Rating"] = avg_rating
             df.at[index, "Book1_Num_Ratings"] = total_ratings
                 
-            # Romantasy classification will happen at the end to include series length
+            # ROMANTASY CHECKER: STEP 1 & STEP 4 LOGIC
+            classification = "DF-0 - Fail (No Credible Match)"
+            
+            if genres:
+                lower_genres = [g.lower() for g in genres]
+                top5 = lower_genres[:5]
+                top10 = lower_genres[:10]
+                
+                combined_tags = ['romantasy', 'fantasy romance', 'romantic fantasy', 'paranormal romance']
+                romance_tags = ['romance', 'urban fantasy romance', 'monster romance', 'historical fantasy romance', 'young adult romance', 'dark romance', 'slow burn romance'] + combined_tags
+                fantasy_tags = ['fantasy', 'high fantasy', 'epic fantasy', 'urban fantasy', 'paranormal', 'supernatural', 'magic', 'fae', 'witches', 'vampires', 'dragons', 'mythology', 'fairy tales', 'monsters', 'isekai', 'reincarnation', 'science fantasy', 'time travel'] + combined_tags
+                
+                has_combined_top5 = any(t in combined_tags for t in top5)
+                has_rom_top5 = any(t in romance_tags for t in top5)
+                has_fan_top5 = any(t in fantasy_tags for t in top5)
+                
+                has_rom_top10 = any(t in romance_tags for t in top10)
+                has_fan_top10 = any(t in fantasy_tags for t in top10)
+                
+                if has_combined_top5 or (has_rom_top5 and has_fan_top5):
+                    classification = "A - Strong Match"
+                elif has_rom_top10 and has_fan_top10 and (has_rom_top5 or has_fan_top5):
+                    classification = "B - Confirmed Match"
+                elif has_rom_top10 or has_fan_top10:
+                    classification = "C - Weak Match"
+                    
+            # APPLY STEP 4 (DF-3) OVERRIDE
+            if avg_rating > 0 and avg_rating < 3.60 and total_ratings < 100:
+                classification = "DF-3 - Low Evidence & Rating"
+
+            df.at[index, "Romantasy Checker"] = classification
+
+            print(f"[{index}] Extracted Genres & Synopsis. Match: {classification}")
             
             # 4. Find Series Link dynamically
             series_tag = await page.query_selector('h3.Text__title3 a[href*="/series/"], [data-testid="series"] a, div.BookPageTitleSection__title a[href*="/series/"], a.infoBoxRowItem[href*="/series/"]')
@@ -166,8 +193,6 @@ async def process_row(index, row, df, context, sem):
                         df.at[index, "Num_Primary_Books_in_Series"] = 1
                         df.at[index, "Total_Page_Count_of_Primary_Books"] = int(p_match.group(1))
                         print(f"[{index}] Standalone Book Pages: {p_match.group(1)}")
-                
-                _apply_romantasy_checker(df, index, row, genres)
                 return
                 
             # 5. Extract Series URL and navigate
@@ -195,149 +220,60 @@ async def process_row(index, row, df, context, sem):
                     if book_num.isdigit():
                         num_primary_books += 1
                         
-                        # Aggressive scraping: Always visit the book page to get accurate page count
-                        b_link = await item.query_selector('a.bookTitle, a[href*="/book/show"]')
-                        if b_link:
-                            b_url = await b_link.evaluate("el => el.href")
-                            b_page = await context.new_page()
-                            try:
-                                await b_page.goto(b_url, wait_until="domcontentloaded", timeout=30000)
-                                await asyncio.sleep(1)
-                                
-                                # If this is Book 1, scrape the definitive rating and replace the default one
-                                if book_num == "1":
-                                    b_rating_el = await b_page.query_selector('div.RatingStatistics__rating')
-                                    if b_rating_el:
-                                        try: df.at[index, "Book1_Rating"] = float((await b_rating_el.inner_text()).strip())
-                                        except: pass
-                                        
-                                    b_count_el = await b_page.query_selector('[data-testid="ratingsCount"]')
-                                    if b_count_el:
-                                        try:
-                                            b_count_txt = (await b_count_el.inner_text()).replace(',', '').split()[0]
-                                            df.at[index, "Book1_Num_Ratings"] = int(b_count_txt)
-                                        except: pass
-                                        
-                                # Robust Page Extraction with Retry
-                                extracted_pages = 0
-                                
-                                for attempt in range(2):
-                                    if extracted_pages > 0:
-                                        break
-                                        
-                                    if attempt == 1:
-                                        print(f"[{index}]   - Book {book_num} pages was 0. Rechecking (Attempt 2)...")
-                                        await b_page.reload(wait_until="domcontentloaded")
-                                        await asyncio.sleep(2)
-                                        
-                                    # 1. Try JSON-LD
-                                    try:
-                                        ld_el = await b_page.query_selector('script[type="application/ld+json"]')
-                                        if ld_el:
-                                            import json
-                                            data = json.loads(await ld_el.inner_text())
-                                            if isinstance(data, list): data = data[0]
-                                            if 'numberOfPages' in data:
-                                                extracted_pages = int(data['numberOfPages'])
-                                    except: pass
+                        # Always open the page if it's Book 1 (to ensure we get the correct Book 1 rating) or if we couldn't find the page count in the snippet
+                        page_match = re.search(r'(\d+)\s+pages', item_text, re.IGNORECASE)
+                        if page_match and book_num != "1":
+                            pages = int(page_match.group(1))
+                            total_page_count += pages
+                            print(f"[{index}]   - Primary Book {book_num} | {pages} pages")
+                        else:
+                            # Visit book to get pages and (if Book 1) ratings concurrently
+                            b_link = await item.query_selector('a.bookTitle, a[href*="/book/show"]')
+                            if b_link:
+                                b_url = await b_link.evaluate("el => el.href")
+                                b_page = await context.new_page()
+                                try:
+                                    await b_page.goto(b_url, wait_until="domcontentloaded", timeout=30000)
                                     
-                                    # 2. Try simple data-testid
-                                    if not extracted_pages:
-                                        p_el = await b_page.query_selector('[data-testid="pagesFormat"]')
-                                        if p_el:
-                                            p_match2 = re.search(r'(\d+)\s*pages', await p_el.inner_text(), re.IGNORECASE)
-                                            if p_match2: extracted_pages = int(p_match2.group(1))
+                                    # If this is Book 1, scrape the definitive rating and replace the default one
+                                    if book_num == "1":
+                                        b_rating_el = await b_page.query_selector('div.RatingStatistics__rating')
+                                        if b_rating_el:
+                                            try: df.at[index, "Book1_Rating"] = float((await b_rating_el.inner_text()).strip())
+                                            except: pass
+                                            
+                                        b_count_el = await b_page.query_selector('[data-testid="ratingsCount"]')
+                                        if b_count_el:
+                                            try:
+                                                b_count_txt = (await b_count_el.inner_text()).replace(',', '').split()[0]
+                                                df.at[index, "Book1_Num_Ratings"] = int(b_count_txt)
+                                            except: pass
+                                            
+                                    # Extract page count
+                                    p_el = await b_page.query_selector('[data-testid="pagesFormat"]')
+                                    if p_el:
+                                        p_text = await p_el.inner_text()
+                                        p_match2 = re.search(r'(\d+)\s*pages', p_text, re.IGNORECASE)
+                                        if p_match2:
+                                            total_page_count += int(p_match2.group(1))
+                                            print(f"[{index}]   - Primary Book {book_num} | {p_match2.group(1)} pages (fetched)")
+                                        elif page_match: # Fallback to snippet if we opened it just for Book 1 rating
+                                            total_page_count += int(page_match.group(1))
+                                            print(f"[{index}]   - Primary Book {book_num} | {page_match.group(1)} pages (fallback snippet)")
+                                except Exception as e:
+                                    pass
+                                finally:
+                                    await b_page.close()
                                     
-                                    # 3. Try clicking Book details
-                                    if not extracted_pages:
-                                        try:
-                                            btn = await b_page.query_selector('button:has-text("Book details")')
-                                            if btn:
-                                                await btn.click(force=True)
-                                                await asyncio.sleep(1)
-                                                p_el = await b_page.query_selector('[data-testid="pagesFormat"]')
-                                                if p_el:
-                                                    p_match2 = re.search(r'(\d+)\s*pages', await p_el.inner_text(), re.IGNORECASE)
-                                                    if p_match2: extracted_pages = int(p_match2.group(1))
-                                        except: pass
-                                        
-                                    # 4. Fallback Regex across entire content
-                                    if not extracted_pages:
-                                        try:
-                                            content = await b_page.content()
-                                            matches = re.findall(r'(\d+)\s*pages', content, re.IGNORECASE)
-                                            if matches:
-                                                extracted_pages = int(matches[0])
-                                        except: pass
-
-                                if extracted_pages:
-                                    total_page_count += extracted_pages
-                                    print(f"[{index}]   - Primary Book {book_num} | {extracted_pages} pages (fetched)")
-                                else:
-                                    print(f"[{index}]   - Primary Book {book_num} | 0 pages (not found)")
-                            except Exception as e:
-                                print(f"[{index}]   - Failed to scrape Book {book_num}: {e}")
-                            finally:
-                                await b_page.close()
-                                    
-            if num_primary_books == 0:
-                num_primary_books = max(1, len(book_items))
-                print(f"[{index}]   - Warning: 0 primary books parsed. Defaulting to {num_primary_books}.")
-                
             print(f"[{index}] Aggressive Scraping Complete. Primary Books: {num_primary_books} | Total Pages: {total_page_count}")
             df.at[index, "Num_Primary_Books_in_Series"] = num_primary_books
             df.at[index, "Total_Page_Count_of_Primary_Books"] = total_page_count
-            
-            _apply_romantasy_checker(df, index, row, genres)
 
         except Exception as e:
             print(f"[{index}] Error rendering page via Playwright: {e}")
         finally:
             await page.close()
 
-def _apply_romantasy_checker(df, index, row, genres):
-    import pandas as pd
-    classification = "Fail"
-    all_tags = []
-    
-    def add_tags(val):
-        if pd.isna(val) or not val: return
-        parts = [p.strip() for p in str(val).split(',')]
-        for p in parts:
-            if p and p not in all_tags: all_tags.append(p)
-            
-    add_tags(row.get('Genre'))
-    for g in genres: add_tags(g)
-    add_tags(row.get('Keyword'))
-    
-    fantasy_kws = ['fantasy', 'paranormal', 'supernatural', 'magic', 'fae', 'witch', 'vampire', 'dragon', 'mythology', 'fairy tale', 'monster', 'isekai', 'reincarnation', 'sci-fi', 'beast']
-    romance_kws = ['romance', 'romantasy', 'romantic', 'love', 'mate', 'heart', 'beauty']
-    
-    idx_f, idx_r = -1, -1
-    for i, tag in enumerate(all_tags):
-        tag_lower = tag.lower()
-        if idx_f == -1 and any(kw in tag_lower for kw in fantasy_kws): idx_f = i
-        if idx_r == -1 and any(kw in tag_lower for kw in romance_kws): idx_r = i
-    for i, tag in enumerate(all_tags):
-        if 'romantasy' in tag.lower():
-            if idx_f == -1 or i < idx_f: idx_f = i
-            if idx_r == -1 or i < idx_r: idx_r = i
-            
-    if idx_f != -1 and idx_r != -1:
-        rank = max(idx_f, idx_r)
-        if rank < 5: classification = "Strong Match"
-        elif rank < 9: classification = "Confirmed Match"
-        else: classification = "Weak Match"
-        
-    num_books = df.at[index, "Num_Primary_Books_in_Series"]
-    if pd.notna(num_books):
-        try:
-            if float(num_books) < 3:
-                classification = "Weak Match"
-        except: pass
-        
-    df.at[index, "Romantasy Checker"] = classification
-    print(f"[{index}] Romantasy Checker: {classification}")
 
 async def run_scraper():
     print(f"Loading {EXCEL_FILE}...")
@@ -364,24 +300,17 @@ async def run_scraper():
         print(f"STARTING BATCH {batch_start} to {batch_end} (Cooldown Architecture)")
         print(f"=======================================================\n")
         
-        # Fast-forward check: skip launching browser if the whole batch is fully completed
+        # Fast-forward check: skip launching browser if the whole batch has no 0-book rows
         needs_processing = False
         for i in range(batch_start, batch_end):
-            row = df.iloc[i]
-            existing_val = str(row.get("GoodReads_Series_URL", "")).strip()
-            num_books = row.get("Num_Primary_Books_in_Series")
-            num_pages = row.get("Total_Page_Count_of_Primary_Books")
-            
-            has_url = existing_val and existing_val.lower() != 'nan' and existing_val != 'none'
-            has_books = str(num_books) != '0' and str(num_books) != '0.0' and pd.notna(num_books)
-            has_pages = str(num_pages) != '0' and str(num_pages) != '0.0' and pd.notna(num_pages)
-            
-            if not (has_url and has_books and has_pages):
+            num_books = df.iloc[i].get("Num_Primary_Books_in_Series")
+            is_zero_books = pd.notna(num_books) and (str(num_books).strip() == '0' or num_books == 0 or num_books == 0.0)
+            if is_zero_books:
                 needs_processing = True
                 break
                 
         if not needs_processing:
-            print(f"Entire batch {batch_start}-{batch_end} is already fully complete. Skipping.")
+            print(f"Entire batch {batch_start}-{batch_end} has no 0-book rows. Skipping.")
             continue
 
         async with async_playwright() as p:
