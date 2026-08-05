@@ -1,33 +1,32 @@
-import asyncio
 import aiohttp
-from bs4 import BeautifulSoup
-import re
+import asyncio
 
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-}
+async def test_fetch():
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+    }
+    
+    url = "https://www.goodreads.com/book/show/15722271-promised-to-the-beta"
+    search_url = "https://www.goodreads.com/search?q=Promised+to+the+Beta"
+    
+    async with aiohttp.ClientSession(headers=headers) as session:
+        print("Fetching Book URL...")
+        async with session.get(url) as response:
+            print(f"Book Status: {response.status}")
+            html = await response.text()
+            print(f"Book HTML Length: {len(html)}")
+            if "RatingStatistics__rating" in html or "ApolloState" in html:
+                print("Book Page contains React data!")
+                
+        print("\nFetching Search URL...")
+        async with session.get(search_url) as response:
+            print(f"Search Status: {response.status}")
+            html = await response.text()
+            print(f"Search HTML Length: {len(html)}")
+            if "bookTitle" in html:
+                print("Search Page contains book titles!")
 
-async def fetch_html(session, url):
-    async with session.get(url, headers=HEADERS, timeout=30) as response:
-        print(f"Status: {response.status}")
-        return await response.text()
-        return None
-
-async def test():
-    async with aiohttp.ClientSession() as session:
-        url = "https://www.goodreads.com/book/show/61291084-almost-strangers"
-        html = await fetch_html(session, url)
-        if not html:
-            print("Failed to fetch")
-            return
-            
-        soup = BeautifulSoup(html, "html.parser")
-        pages_format = soup.find(attrs={"data-testid": "pagesFormat"})
-        if pages_format:
-            print("Found pages using pagesFormat:", pages_format.text)
-        else:
-            print("Could not find pagesFormat. Title:", soup.title.string if soup.title else "None")
-        
-asyncio.run(test())
+if __name__ == "__main__":
+    asyncio.run(test_fetch())

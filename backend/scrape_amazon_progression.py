@@ -35,28 +35,19 @@ async def process_book(context, book_data, genre_name):
     result = {
         "Book Title": final_title,
         "Author Name": amz_details.get("Author Name", ""),
-        "Genre": genre_name,
-        "Sub_Genre": "",
-        "Part of a Series?": is_series,
-        "Part_of_Series": part_of_series_text,
         "Series Name": amz_details.get("Series Name", ""),
-        "Book Number in Series": amz_details.get("Book Number", ""),
-        "Number of Books in Series": amz_details.get("Total Books", ""),
-        "Publisher": amz_details.get("Publisher", ""),
-        "Publication Date": amz_details.get("Publication Date", ""),
-        "Print Length / Pages": amz_details.get("Pages", ""),
-        "Price_Tier": price_tier,
-        "Amazon URL": url,
-        "Amazon Stars": amz_details.get("Rating", ""),
-        "Amazon Ratings": amz_details.get("Number of Reviews", ""),
+        "Genre": genre_name,
         "Logline": desc[:1500] if desc != "N/A" else "",
-        "Best Sellers Rank": amz_details.get("Inner Rank", ""),
+        "Amazon URL": url,
+        "Keyword": genre_name,
         "GoodReads_Series_URL": "",
-        "Num_Primary_Books": "",
-        "Total_Pages_Primary_Books": "",
-        "Book1_Rating": "",
-        "Book1_Num_Ratings": "",
-        "Licensing Status": "Available"
+        "Num_Primary_Books_in_Series": amz_details.get("Total Books", ""),
+        "Total_Page_Count_of_Primary_Books": amz_details.get("Pages", ""),
+        "Book1_Rating": amz_details.get("Rating", ""),
+        "Book1_Num_Ratings": amz_details.get("Number of Reviews", ""),
+        "Genre Tags": "",
+        "Romantasy Checker": "",
+        "Synopsis": ""
     }
     
     for k, v in result.items():
@@ -173,18 +164,7 @@ async def run_scraper(search_url, genre_name, limit, output_file):
         await browser.close()
 
 def ensure_excel(output_file):
-    if not os.path.exists(output_file):
-        columns = [
-            "Book Title", "Author Name", "Genre", "Sub_Genre", "Part of a Series?", 
-            "Part_of_Series", "Series Name", "Book Number in Series", "Number of Books in Series",
-            "Publisher", "Publication Date", "Print Length / Pages", "Price_Tier", "Amazon URL",
-            "Amazon Stars", "Amazon Ratings", "Logline", "Best Sellers Rank", "GoodReads_Series_URL",
-            "Num_Primary_Books", "Total_Pages_Primary_Books", "Book1_Rating", "Book1_Num_Ratings",
-            "Licensing Status"
-        ]
-        df = pd.DataFrame(columns=columns)
-        df.to_excel(output_file, index=False)
-        print(f"Created fresh Excel sheet: {output_file}")
+    pass # File already created by the bot with exact columns
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Universal Amazon Book Scraper")
@@ -197,9 +177,6 @@ if __name__ == "__main__":
     genre_name = args.genre
     limit = args.limit
 
-    # Auto-format the Excel filename
-    safe_genre = genre_name.replace(" ", "_")
-    output_file = rf"E:\Internship\PocketFM\Amazon_Scraping_{safe_genre}.xlsx"
+    output_file = r"E:\Internship\PocketFM\Amazon_Scraping_Target.xlsx"
 
-    ensure_excel(output_file)
     asyncio.run(run_scraper(search_url, genre_name, limit, output_file))

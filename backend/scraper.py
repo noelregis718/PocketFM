@@ -411,6 +411,17 @@ class AmazonScraper:
         try:
             # domcontentloaded is fast and sufficient — detail elements are in DOM immediately
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            
+            while True:
+                try:
+                    if await page.query_selector('form[action="/errors/validateCaptcha"], input#captchacharacters'):
+                        print("🚨 CAPTCHA DETECTED on details page! Please solve it in the browser...", flush=True)
+                        await asyncio.sleep(5)
+                    else:
+                        break
+                except Exception:
+                    break
+                    
             # Give lazy sections 2s to render without waiting for full networkidle
             await asyncio.sleep(2)
 
@@ -423,6 +434,10 @@ class AmazonScraper:
                 '#bookDescription',
                 '#book-description-widget',
                 '[data-a-expander-name="book_description_expander"]',
+                '#series-page-description',
+                '.series-description',
+                '[data-a-expander-name="series_description_expander"]',
+                '#series-description-expander'
             ]:
                 desc_el = await page.query_selector(desc_sel)
                 if desc_el:
@@ -462,12 +477,41 @@ class AmazonScraper:
                         break
 
             if author == "N/A":
-                byline_el = await page.query_selector('#bylineInfo, #byline')
+                byline_el = await page.query_selector('#bylineInfo, #byline, .author-bottom')
                 if byline_el:
                     byline_text = clean_text(await byline_el.inner_text())
-                    m = re.search(r'\bby\s+([A-Z][A-Za-z\s\.\-\']+?)(?:\s*[\(,;|]|$)', byline_text, re.IGNORECASE)
-                    if m:
-                        author = m.group(1).strip()
+                    # Check for multi-author pattern: "by Sarina Bowen (Author), Rebecca Yarros (Author)"
+                    if " (Author)" in byline_text:
+                        # Extract all names before " (Author)"
+                        m_authors = re.findall(r'([A-Z][A-Za-z\s\.\-\']+?)\s*\(Author\)', byline_text)
+                        if m_authors:
+                            author = ", ".join([a.strip() for a in m_authors if 'by ' not in a.lower() or a.lower().startswith('by ')])
+                            author = re.sub(r'(?i)^by\s+', '', author) # remove 'by ' prefix if it got captured in the first author
+                    
+                    if author == "N/A" or not author:
+                        m = re.search(r'\bby\s+([A-Z][A-Za-z\s\.\-\']+?)(?:\s*[\(,;|]|$)', byline_text, re.IGNORECASE)
+                        if m:
+                            author = m.group(1).strip()
+            
+            if author == "N/A":
+                # Super fallback: look for any link containing author-related hrefs
+                try:
+                    author_fallback = await page.evaluate('''() => {
+                        let links = Array.from(document.querySelectorAll('a'));
+                        for(let a of links) {
+                            let text = a.innerText.trim();
+                            if(text.length > 1 && text.length < 50 && (a.href.includes('search-type=ss') || a.href.includes('/author/') || a.href.includes('contributor'))) {
+                                if(!text.toLowerCase().includes('visit') && !text.toLowerCase().includes('search results')) {
+                                    return text;
+                                }
+                            }
+                        }
+                        return "N/A";
+                    }''')
+                    if author_fallback and author_fallback != "N/A":
+                        author = author_fallback
+                except:
+                    pass
 
             # --- Publisher & Publication Date ---
             # Strategy 1: bullet list items (most common layout)
@@ -865,6 +909,10 @@ class AmazonScraper:
                     if m: publisher = m.group(1).strip()
                     elif re.search(r'Independently published', full_text, re.IGNORECASE):
                         publisher = "Independently published"
+                    
+                    if publisher == "N/A":
+                        m_sold = re.search(r'Sold by:\s*([A-Za-z0-9\s,&.-]+)', full_text, re.IGNORECASE)
+                        if m_sold: publisher = m_sold.group(1).strip()
                 
                 # 3. Publication Date
                 if pub_date == "N/A":
@@ -897,13 +945,28 @@ class AmazonScraper:
                     if rank_matches:
                         inner_rank = " | ".join(rank_matches[:3])
                         
-                # 8. Logline / Description Fallback
-                # If desc wasn't picked up by standard selectors, grab a chunk of text that looks like a story summary
+                # 8. Author Name Fallback (Series layout)
+                if author == "N/A":
+                    # Looks for "(Author)" anywhere in the text and grabs the preceding words
+                    m = re.search(r'(?:by\s+)?([A-Za-z\s\.,&]+?)\s*(?:\(Author\)|\(Contributor\))', full_text, re.IGNORECASE)
+                    if m:
+                        author_val = m.group(1).strip()
+                        # Clean up if it grabbed too much
+                        author_val = author_val.split('\n')[-1].strip()
+                        if len(author_val) < 50:
+                            author = author_val
+                        
+                # 9. Logline / Description Fallback
                 desc = locals().get('description', "N/A")
                 if desc == "N/A" or len(desc) < 20:
-                    # Look for paragraph-style text
-                    m = re.search(r'\n([A-Z][\s\S]{200,1500}?)(?:\n\n|\n[A-Z][a-z]+(?:\s[A-Z][a-z]+)?\n|Read less|Read more)', full_text)
-                    if m: desc = m.group(1).strip()
+                    # Extremely loose "About this series" matcher
+                    m_series = re.search(r'About[\s\S]{1,30}?series\s*\n([\s\S]{100,2000}?)(?:\n\n|\n[A-Z][a-z]+(?:\s[A-Z][a-z]+)?\n|Read less|Read more|See included|Customer reviews|$)', full_text, re.IGNORECASE)
+                    if m_series:
+                        desc = m_series.group(1).strip()
+                    else:
+                        # Grab any large paragraph block
+                        m = re.search(r'\n([A-Z][\s\S]{200,2000}?)(?:\n\n|\n[A-Z][a-z]+(?:\s[A-Z][a-z]+)?\n|Read less|Read more|Customer reviews|$)', full_text)
+                        if m: desc = m.group(1).strip()
                 # Update locals description so it carries over
                 locals()['description'] = desc
             except Exception as e:
