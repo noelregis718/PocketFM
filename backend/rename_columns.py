@@ -1,25 +1,26 @@
-import pandas as pd
+import openpyxl
 
-def main():
-    file_path = "e:/Internship/PocketFM/1852 Media.xlsx"
-    print(f"Loading {file_path}...")
-    
-    df = pd.read_excel(file_path, engine="openpyxl")
-    
-    # Rename "Name of Series" to "Name of books"
-    if 'Name of Series' in df.columns:
-        df.rename(columns={'Name of Series': 'Name of books'}, inplace=True)
-        print("Renamed 'Name of Series' -> 'Name of books'")
-        
-    # Add a new column named "Series" if it doesn't exist
-    if 'Series' not in df.columns:
-        # We insert it right after the first column (Name of books)
-        df.insert(1, 'Series', None)
-        print("Added new column 'Series'")
-        
-    print("Saving updated Excel file...")
-    df.to_excel(file_path, index=False, engine="openpyxl")
-    print("Success!")
+file_path = r'e:\Internship\PocketFM\Merged_Romance_Keywords.xlsx'
+wb = openpyxl.load_workbook(file_path)
+ws = wb.active
 
-if __name__ == "__main__":
-    main()
+col_K_val = ws['K1'].value
+col_L_val = ws['L1'].value
+
+print(f"Original Column K: {col_K_val}")
+print(f"Original Column L: {col_L_val}")
+
+def prepend_amazon(val):
+    if val and isinstance(val, str):
+        if "amazon" not in val.lower():
+            return f"Amazon {val}"
+    return val
+
+ws['K1'].value = prepend_amazon(col_K_val)
+ws['L1'].value = prepend_amazon(col_L_val)
+
+print(f"New Column K: {ws['K1'].value}")
+print(f"New Column L: {ws['L1'].value}")
+
+wb.save(file_path)
+print("Headers updated successfully.")
