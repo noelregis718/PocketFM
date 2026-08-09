@@ -8,8 +8,8 @@ import json
 from playwright.async_api import async_playwright
 
 EXCEL_FILE = r"E:\Internship\PocketFM\Merged_Romance_Keywords.xlsx"
-START_ROW = 4990
-TARGET_ROWS = 5290
+START_ROW = 10290
+TARGET_ROWS = 10400
 CONCURRENCY = 5
 BATCH_SIZE = 50
 
