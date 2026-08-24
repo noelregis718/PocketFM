@@ -379,10 +379,10 @@ class AmazonScraper:
             for item in items:
                 asin = await item.get_attribute('data-asin')
                 if not asin or len(asin) < 5: continue
-                l_el = await item.query_selector("h2 a")
+                l_el = await item.query_selector("h2 a, a.a-link-normal[href*='/dp/']")
                 if l_el:
                     h = await l_el.evaluate("el => el.href")
-                    if h and "/dp/" in h: 
+                    if h and ("/dp/" in h or "/product/" in h): 
                         href = h
                         break
             
@@ -418,6 +418,14 @@ class AmazonScraper:
                         print("🚨 CAPTCHA DETECTED on details page! Please solve it in the browser...", flush=True)
                         await asyncio.sleep(5)
                     else:
+                        try:
+                            continue_btn = await page.query_selector('text="Continue shopping"')
+                            if continue_btn:
+                                print("🔄 Clicking 'Continue shopping' button...", flush=True)
+                                await continue_btn.click()
+                                await asyncio.sleep(3)
+                        except Exception:
+                            pass
                         break
                 except Exception:
                     break
@@ -437,7 +445,12 @@ class AmazonScraper:
                 '#series-page-description',
                 '.series-description',
                 '[data-a-expander-name="series_description_expander"]',
-                '#series-description-expander'
+                '#series-description-expander',
+                '#series-description_feature_div',
+                'div[id*="series-description"]',
+                'div:has-text("About this series") + div',
+                '.a-expander-content:has-text("About this series")',
+                '#series-description'
             ]:
                 desc_el = await page.query_selector(desc_sel)
                 if desc_el:
@@ -514,9 +527,23 @@ class AmazonScraper:
                     pass
 
             # --- Publisher & Publication Date ---
-            # Strategy 1: bullet list items (most common layout)
+            # Strategy 1: specific RPI selectors
             publisher = "N/A"
             pub_date = "N/A"
+            
+            try:
+                rpi_pub = await page.query_selector('#rpi-attribute-book_details-publisher .rpi-attribute-value')
+                if rpi_pub:
+                    val = clean_text(await rpi_pub.inner_text())
+                    if val: publisher = val
+                    
+                rpi_date = await page.query_selector('#rpi-attribute-book_details-publication_date .rpi-attribute-value')
+                if rpi_date:
+                    val = clean_text(await rpi_date.inner_text())
+                    if val: pub_date = val
+            except: pass
+
+            # Strategy 2: bullet list items (most common layout)
 
             for sel in [
                 '#detailBullets_feature_div li',
@@ -573,10 +600,14 @@ class AmazonScraper:
                                 val = re.sub(r'\s*\(\d+.*?\)\s*$', '', val).strip()
                                 if val and len(val) > 1:
                                     publisher = val
-                            elif line.lower().strip() == 'publisher' and i + 1 < len(lines):
-                                next_val = lines[i + 1].strip()
-                                if next_val and len(next_val) > 1:
-                                    publisher = next_val
+                            elif line.lower().strip() == 'publisher':
+                                # Look ahead up to 3 lines to skip empty lines
+                                for offset in range(1, 4):
+                                    if i + offset < len(lines):
+                                        next_val = lines[i + offset].strip()
+                                        if next_val and len(next_val) > 1:
+                                            publisher = next_val
+                                            break
 
                         if pub_date == "N/A" and re.search(r'publication\s*date', line, re.IGNORECASE):
                             m = re.search(r'publication\s*date\s*[:\u200e\u200f]?\s*(.+)', line, re.IGNORECASE)
@@ -584,10 +615,13 @@ class AmazonScraper:
                                 val = m.group(1).strip().lstrip(':').strip()
                                 if val and len(val) > 1:
                                     pub_date = val
-                            elif i + 1 < len(lines):
-                                next_val = lines[i + 1].strip()
-                                if next_val and len(next_val) > 1:
-                                    pub_date = next_val
+                            elif line.lower().strip() == 'publication date':
+                                for offset in range(1, 4):
+                                    if i + offset < len(lines):
+                                        next_val = lines[i + offset].strip()
+                                        if next_val and len(next_val) > 1:
+                                            pub_date = next_val
+                                            break
                 except Exception as e:
                     print(f"Text scan error: {e}")
 

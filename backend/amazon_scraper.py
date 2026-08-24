@@ -5,26 +5,31 @@ import pandas as pd
 import re
 from scraper import AmazonScraper, clean_text, normalize_title_for_search
 from playwright.async_api import async_playwright
+import openpyxl
+from openpyxl.styles import Alignment, PatternFill, Font
 
-MASTER_STATE_FILE = r"E:\Internship\PocketFM\backend\master_mission_state_amazon_fantasy_tournament.json"
-MISSION_KEY = "fantasy_tournament"
-OUTPUT_FILE = r"E:\Internship\PocketFM\Amazon_Fantasy_Tournament_Romance.xlsx"
+MASTER_STATE_FILE = r"E:\Internship\PocketFM\backend\master_mission_state_amazon_litrpg.json"
+MISSION_KEY = "litrpg_romance"
+OUTPUT_FILE = r"E:\Internship\PocketFM\Combined List of Titles.xlsx"
 
 BATCH_SIZE = 500
 MAX_TABS = 8
-SEARCH_URL = "https://www.amazon.com/s?k=Fantasy+Tournament+Romance&i=stripbooks&crid=1QBF50NGCF0C&sprefix=fantasy+tournament+romance%2Cstripbooks%2C427&ref=nb_sb_noss"
-GENRE_NAME = "High-Stakes Games & Deadly Trials"
+MAX_TOTAL_LIMIT = 100000
+SEARCH_URL = "https://www.amazon.com/s?k=LitRPG+Romance&i=stripbooks&crid=10JFR8ZJP0WSW&sprefix=%2Cstripbooks%2C359&ref=nb_sb_noss_2"
+SUB_GENRE = "Korean Romance Fantasy / Isekai"
+KEYWORD = "LitRPG Romance"
 MAX_PAGES = 110
 
 def ensure_excel(output_file):
     if not os.path.exists(output_file):
         columns = [
-            "Book Title", "Author Name", "Genre", "Sub_Genre", "Part of a Series?", 
-            "Part_of_Series", "Series Name", "Book Number in Series", "Number of Books in Series",
-            "Publisher", "Publication Date", "Print Length / Pages", "Price_Tier", "Amazon URL",
-            "Amazon Stars", "Amazon Ratings", "Number of reviews", "Logline", "Best Sellers Rank", "GoodReads_Series_URL",
-            "Num_Primary_Books", "Total_Pages_Primary_Books", "Book1_Rating", "Book1_Num_Ratings",
-            "Licensing Status"
+            "Book Title", "Author Name", "Series Name", "Sub-Genre", "Logline", 
+            "Amazon URL", "Keyword", "Amazon Num_Primary_Books_in_Series", 
+            "Amazon Total_Page_Count_of_Primary_Books", "Amazon Book1_Rating", 
+            "Amazon Book1_Num_Ratings", "Publisher", "Publication Date", "Best Sellers Rank", 
+            "GoodReads_Series_URL", "Goodreads Primary Books Number", "Goodreads Primary Books Page Count", 
+            "Goodreads Rating Book 1", "Goodreads No. of Ratings Book 1", "Goodreads Link", 
+            "Genre Tags", "Romantasy Checker", "Synopsis"
         ]
         df = pd.DataFrame(columns=columns)
         df.to_excel(output_file, index=False)
@@ -33,14 +38,17 @@ def ensure_excel(output_file):
 def load_state():
     if os.path.exists(MASTER_STATE_FILE):
         with open(MASTER_STATE_FILE, 'r') as f:
-            master = json.load(f)
-            if MISSION_KEY in master:
-                state = master[MISSION_KEY]
-                state['last_page_scanned'] = int(state.get('last_page_scanned', 0))
-                state['total_processed_global'] = int(state.get('total_processed_global', 0))
-                state['last_asin'] = state.get('last_asin', None)
-                state['last_book_title'] = state.get('last_book_title', None)
-                return state
+            try:
+                master = json.load(f)
+                if MISSION_KEY in master:
+                    state = master[MISSION_KEY]
+                    state['last_page_scanned'] = int(state.get('last_page_scanned', 0))
+                    state['total_processed_global'] = int(state.get('total_processed_global', 0))
+                    state['last_asin'] = state.get('last_asin', None)
+                    state['last_book_title'] = state.get('last_book_title', None)
+                    return state
+            except json.JSONDecodeError:
+                pass
     return {"last_page_scanned": 0, "total_processed_global": 0, "last_asin": None, "last_book_title": None}
 
 def save_state(state):
@@ -55,6 +63,49 @@ def save_state(state):
     with open(MASTER_STATE_FILE, 'w') as f:
         json.dump(master, f, indent=4)
 
+def extract_series_custom(title):
+    if not title: return ""
+    # "New Series Book 1 - Hear me Out" -> "New Series"
+    match_dash = re.search(r'^(.*?) Book \d+ -', title, re.IGNORECASE)
+    if match_dash: return match_dash.group(1).strip()
+    
+    # Inverted commas: "Series Name" or 'Series Name'
+    match_quotes = re.search(r'["\'](.*?)["\']', title)
+    if match_quotes: return match_quotes.group(1).strip()
+    
+    # Parentheses: (Series Name Book 1)
+    match_paren = re.search(r'\((.*?)(?:\s+#?\d+|\s+Book\s+\d+)?\)', title, re.IGNORECASE)
+    if match_paren:
+        name = match_paren.group(1).strip()
+        name = re.sub(r'[\s#]+$', '', name)
+        if len(name) > 2: return name
+    return ""
+
+def apply_styling(excel_path):
+    try:
+        wb = openpyxl.load_workbook(excel_path)
+        ws = wb.active
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+        
+        for col in range(1, ws.max_column + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 25
+            
+        for row in range(2, ws.max_row + 1):
+            ws.row_dimensions[row].height = 15
+            for col in range(1, ws.max_column + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                
+        wb.save(excel_path)
+        print("Excel styling and text wrapping applied successfully.")
+    except Exception as e:
+        print(f"Failed to apply styling: {e}")
+
 async def check_captcha(page):
     while True:
         try:
@@ -66,6 +117,18 @@ async def check_captcha(page):
         except:
             break
 
+async def check_continue_shopping(page):
+    try:
+        btn = await page.query_selector("text='Continue shopping'")
+        if not btn:
+            btn = await page.query_selector("a:has-text('Continue shopping')")
+        if btn:
+            print("Found 'Continue shopping' button. Clicking it...", flush=True)
+            await btn.click()
+            await asyncio.sleep(2)
+    except Exception as e:
+        pass
+
 async def process_book(context, book_data):
     amazon = AmazonScraper()
     url = book_data.get("Amazon URL")
@@ -74,13 +137,13 @@ async def process_book(context, book_data):
 
     amz_details = await amazon.scrape_product_details_tab(context, url)
     
-    # Check currency heartbeat (Aggressive scraper check)
     price_raw = amz_details.get("Price", "N/A")
     if "INR" in price_raw or "₹" in price_raw or "\u20b9" in price_raw or "Rs" in price_raw:
         print(f"    [Heartbeat] Non-USD detected. Location sync...")
         try:
             temp_page = await context.new_page()
             await temp_page.goto("https://www.amazon.com", wait_until="domcontentloaded", timeout=45000)
+            await check_continue_shopping(temp_page)
             await amazon.set_amazon_location(temp_page, "90016")
             await asyncio.sleep(2)
             await temp_page.close()
@@ -95,60 +158,40 @@ async def process_book(context, book_data):
     desc = amz_details.get("Description", "N/A")
     publisher = amz_details.get("Publisher", "N/A")
     pub_date = amz_details.get("Publication Date", "N/A")
-    pages = amz_details.get("Pages", "N/A")
 
-    price_tier = amz_details.get("Price", "N/A").replace('\n', ' | ') if amz_details.get("Price") != "N/A" else "N/A"
-    is_series = "Yes" if amz_details.get("Series Name") and amz_details.get("Series Name") != "N/A" else "No"
-
-    # --- BOOK 1 FALLBACK TRIGGER (From Fae Scraper) ---
-    if is_series == "Yes" and str(amz_details.get("Book Number")) != "1":
-        if publisher == "N/A" or pub_date == "N/A" or pages == "N/A" or desc == "N/A" or len(desc) < 20:
-            print(f"    -> Missing details for '{actual_title}'. Triggering Book 1 Fallback...", flush=True)
-            try:
-                book1_details = await amazon.get_book1_details(context, amz_details.get("Series Name"), amz_details.get("Author Name", ""))
-                if book1_details:
-                    if publisher == "N/A":
-                        publisher = book1_details.get("Publisher", "N/A")
-                    if pub_date == "N/A":
-                        pub_date = book1_details.get("Publication Date", "N/A")
-                    if pages == "N/A":
-                        pages = book1_details.get("Pages", "N/A")
-                    if desc == "N/A" or len(desc) < 20:
-                        desc = book1_details.get("Description", desc)
-            except Exception as e:
-                print(f"    -> Book 1 Fallback failed: {e}")
-
-    part_of_series_text = f"{amz_details.get('Series Name')} Book {amz_details.get('Book Number')}" if is_series == "Yes" else "N/A"
+    series_name = amz_details.get("Series Name", "")
+    if not series_name or series_name == "N/A":
+        series_name = extract_series_custom(actual_title)
+        
+    num_primary_books = amz_details.get("Total Books", "")
+    total_pages_primary = amz_details.get("Pages", "")
 
     result = {
         "Book Title": actual_title,
         "Author Name": author_name,
-        "Genre": GENRE_NAME,
-        "Sub_Genre": "",
-        "Part of a Series?": is_series,
-        "Part_of_Series": part_of_series_text,
-        "Series Name": amz_details.get("Series Name", ""),
-        "Book Number in Series": amz_details.get("Book Number", ""),
-        "Number of Books in Series": amz_details.get("Total Books", ""),
+        "Series Name": series_name,
+        "Sub-Genre": SUB_GENRE,
+        "Logline": desc[:1500] if desc != "N/A" else "",
+        "Amazon URL": url,
+        "Keyword": KEYWORD,
+        "Amazon Num_Primary_Books_in_Series": num_primary_books,
+        "Amazon Total_Page_Count_of_Primary_Books": total_pages_primary,
+        "Amazon Book1_Rating": amz_details.get("Rating", ""),
+        "Amazon Book1_Num_Ratings": amz_details.get("Number of Reviews", ""),
         "Publisher": publisher,
         "Publication Date": pub_date,
-        "Print Length / Pages": pages,
-        "Price_Tier": price_tier,
-        "Amazon URL": url,
-        "Amazon Stars": amz_details.get("Rating", ""),
-        "Amazon Ratings": amz_details.get("Number of Reviews", ""),
-        "Number of reviews": amz_details.get("Actual Reviews", ""),
-        "Logline": desc[:1500] if desc != "N/A" else "",
         "Best Sellers Rank": amz_details.get("Inner Rank", ""),
         "GoodReads_Series_URL": "",
-        "Num_Primary_Books": "",
-        "Total_Pages_Primary_Books": "",
-        "Book1_Rating": "",
-        "Book1_Num_Ratings": "",
-        "Licensing Status": "Available"
+        "Goodreads Primary Books Number": "",
+        "Goodreads Primary Books Page Count": "",
+        "Goodreads Rating Book 1": "",
+        "Goodreads No. of Ratings Book 1": "",
+        "Goodreads Link": "",
+        "Genre Tags": "",
+        "Romantasy Checker": "",
+        "Synopsis": ""
     }
 
-    # Clean up any 'N/A' returned from the underlying scraper
     for k, v in result.items():
         if v == "N/A":
             result[k] = ""
@@ -188,11 +231,16 @@ async def run_scraper():
         )
 
         while True:
+            if state['total_processed_global'] >= MAX_TOTAL_LIMIT:
+                print(f"Reached test limit of {MAX_TOTAL_LIMIT} books. Stopping.", flush=True)
+                break
+            
             page = await context.new_page()
             search_url = SEARCH_URL
             try:
                 print(f"Navigating to Base Amazon Search...", flush=True)
                 await page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
+                await check_continue_shopping(page)
                 amazon_scraper = AmazonScraper()
                 await amazon_scraper.set_amazon_location(page, "90016")
                 await check_captcha(page)
@@ -209,6 +257,7 @@ async def run_scraper():
                         search_url += f"&ref=sr_pg_{target_page}"
                     print(f"Navigating directly to Target Amazon Search (Page {target_page})...", flush=True)
                     await page.goto(search_url, wait_until="load", timeout=60000)
+                    await check_continue_shopping(page)
                     await check_captcha(page)
 
                 all_discovery_links = []
@@ -275,6 +324,7 @@ async def run_scraper():
                         try:
                             print(f"Flipping to Page {page_count}...", flush=True)
                             await page.goto(search_url, wait_until="load", timeout=60000)
+                            await check_continue_shopping(page)
                             await check_captcha(page)
                             state['last_page_scanned'] = page_count - 1
                         except Exception as e:
@@ -299,13 +349,13 @@ async def run_scraper():
                     else:
                         combined = new_df
                     
-                    # Robust deduplication by Title and URL before saving
                     if 'Amazon URL' in combined.columns:
                         combined = combined.drop_duplicates(subset=['Amazon URL'], keep='first')
                     if 'Book Title' in combined.columns:
                         combined = combined.drop_duplicates(subset=['Book Title'], keep='first')
                         
                     combined.to_excel(OUTPUT_FILE, index=False)
+                    apply_styling(OUTPUT_FILE)
 
                     global_seen_asins.update([r.get('asin') for r in all_discovery_links if r.get('asin')])
                     state['last_page_scanned'] = page_count
@@ -314,7 +364,6 @@ async def run_scraper():
                     last_book_processed = final_rows[-1]
                     state['last_book_title'] = last_book_processed.get('Book Title', '')
                     
-                    # Find ASIN of last book using the URL match from discovery links
                     last_asin = None
                     for dl in all_discovery_links:
                         if dl.get('Amazon URL') == last_book_processed.get('Amazon URL'):
@@ -325,12 +374,11 @@ async def run_scraper():
                     print(f"Batch saved! Total Processed: {state['total_processed_global']}", flush=True)
                 else:
                     print("No books were extracted in this iteration.", flush=True)
-                    # If we found links but no extraction was successful, might be IP blocked
                     if all_discovery_links:
                         print("Possible block. Pausing for a moment.", flush=True)
                         await asyncio.sleep(10)
                     else:
-                        break # No discovery links, we're done
+                        break
                     
             except Exception as e:
                 print(f"Error in batch loop: {e}", flush=True)

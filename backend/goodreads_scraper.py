@@ -1,6 +1,32 @@
 import asyncio
-import re
 import json
+import urllib.request
+import urllib.parse
+import time
+from playwright.async_api import async_playwright
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/javascript, */*; q=0.01',
+}
+
+def get_autocomplete_book_url(query):
+    api_url = f"https://www.goodreads.com/book/auto_complete?format=json&q={urllib.parse.quote_plus(query)}"
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(api_url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=15) as response:
+                data = json.loads(response.read().decode("utf-8", errors="ignore"))
+                if data and len(data) > 0:
+                    book_path = data[0].get('bookUrl', '')
+                    if book_path:
+                        return "https://www.goodreads.com" + book_path
+                return None
+        except Exception as e:
+            time.sleep(1)
+    return None
+
+import re
 import unicodedata
 import os
 
@@ -257,64 +283,68 @@ class GoodreadsScraper:
                 # Use a "Clean" title + Author for search query
                 clean_query_title = normalize_title_for_search(title)
                 query = f"{clean_query_title} {author}".strip()
+                book_url = await asyncio.to_thread(get_autocomplete_book_url, query)
+                if book_url:
+                    print(f"    [Goodreads] Autocomplete API Success! URL: {book_url}")
                 try:
-                    print(f"    [Goodreads] Searching: {query}...")
-                    # Set headers for the search too
-                    await page.set_extra_http_headers({
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    })
-                    search_url = f"https://www.goodreads.com/search?q={query.replace(' ', '+')}"
-                    await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
-                    
-                    # Wait for results to actually populate
-                    await asyncio.sleep(2.5)
-                    
-                    # Broad Selection: Evaluate top results for highest rating if title matches
-                    results_data = []
-                    rows = await page.query_selector_all('tr[itemtype="http://schema.org/Book"], [data-testid="bookSearchResult"]')
-                    
-                    if rows:
-                        for row in rows[:5]:
-                            title_el = await row.query_selector('a.bookTitle, [data-testid="bookTitle"] a, .bookTitle, h3 a[href*="/book/show/"]')
-                            rating_el = await row.query_selector('.minirating, [data-testid="rating"]')
-                            if title_el:
-                                b_title = await title_el.inner_text()
-                                b_link = await title_el.evaluate("el => el.href")
-                                b_rating = 0.0
-                                if rating_el:
-                                    r_text = await rating_el.inner_text()
-                                    r_match = re.search(r'([\d.]+)\s*avg', r_text.lower())
-                                    if r_match: b_rating = float(r_match.group(1))
-                                results_data.append({"title": b_title.strip(), "link": b_link, "rating": b_rating})
-                                
-                    if results_data:
-                        target_t = clean_query_title.lower()
-                        matches = []
-                        for r in results_data:
-                            rt_clean = normalize_title_for_search(r["title"]).lower()
-                            if target_t in rt_clean or rt_clean in target_t:
-                                matches.append(r)
-                                
-                        if not matches:
-                            matches = results_data[:3]
-                            
-                        matches.sort(key=lambda x: x["rating"], reverse=True)
-                        book_url = matches[0]["link"]
-                        print(f"    [Goodreads] Selected highest rated match: '{matches[0]['title']}' ({matches[0]['rating']} avg rating)")
-                    
                     if not book_url:
-                        first_link = await page.query_selector('a.bookTitle, [data-testid="bookTitle"] a, .bookTitle, [data-testid="bookSearchResult"] a, h3 a[href*="/book/show/"]')
-                        if not first_link:
-                            if await page.query_selector('#captcha-image, .captcha, iframe[src*="captcha"]'):
-                                print(f"\n    [!!! ACTION REQUIRED !!!] CAPTCHA detected for '{title}'! Please solve it in the browser window. (5 minute timeout)")
-                            try:
-                                await page.wait_for_selector('a.bookTitle, [data-testid="bookTitle"] a, .bookTitle', timeout=300000)
-                                first_link = await page.query_selector('a.bookTitle, [data-testid="bookTitle"] a, .bookTitle, [data-testid="bookSearchResult"] a')
-                            except:
-                                print(f"    [Timeout] CAPTCHA not solved in 5 minutes. Falling back to Tier 2...")
-                        if first_link:
-                            book_url = await first_link.evaluate("el => el.href")
-                            print(f"    [Goodreads] Success! Captured fallback result: {book_url}")
+                        print(f"    [Goodreads] Searching: {query}...")
+                        # Set headers for the search too
+                        await page.set_extra_http_headers({
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                        })
+                        search_url = f"https://www.goodreads.com/search?q={query.replace(' ', '+')}"
+                        await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
+                    
+                        # Wait for results to actually populate
+                        await asyncio.sleep(2.5)
+                    
+                        # Broad Selection: Evaluate top results for highest rating if title matches
+                        results_data = []
+                        rows = await page.query_selector_all('tr[itemtype="http://schema.org/Book"], [data-testid="bookSearchResult"]')
+                    
+                        if rows:
+                            for row in rows[:5]:
+                                title_el = await row.query_selector('a.bookTitle, [data-testid="bookTitle"] a, .bookTitle, h3 a[href*="/book/show/"]')
+                                rating_el = await row.query_selector('.minirating, [data-testid="rating"]')
+                                if title_el:
+                                    b_title = await title_el.inner_text()
+                                    b_link = await title_el.evaluate("el => el.href")
+                                    b_rating = 0.0
+                                    if rating_el:
+                                        r_text = await rating_el.inner_text()
+                                        r_match = re.search(r'([\d.]+)\s*avg', r_text.lower())
+                                        if r_match: b_rating = float(r_match.group(1))
+                                    results_data.append({"title": b_title.strip(), "link": b_link, "rating": b_rating})
+                                
+                        if results_data:
+                            target_t = clean_query_title.lower()
+                            matches = []
+                            for r in results_data:
+                                rt_clean = normalize_title_for_search(r["title"]).lower()
+                                if target_t in rt_clean or rt_clean in target_t:
+                                    matches.append(r)
+                                
+                            if not matches:
+                                matches = results_data[:3]
+                            
+                            matches.sort(key=lambda x: x["rating"], reverse=True)
+                            book_url = matches[0]["link"]
+                            print(f"    [Goodreads] Selected highest rated match: '{matches[0]['title']}' ({matches[0]['rating']} avg rating)")
+                    
+                        if not book_url:
+                            first_link = await page.query_selector('a.bookTitle, [data-testid="bookTitle"] a, .bookTitle, [data-testid="bookSearchResult"] a, h3 a[href*="/book/show/"]')
+                            if not first_link:
+                                if await page.query_selector('#captcha-image, .captcha, iframe[src*="captcha"]'):
+                                    print(f"\n    [!!! ACTION REQUIRED !!!] CAPTCHA detected for '{title}'! Please solve it in the browser window. (5 minute timeout)")
+                                try:
+                                    await page.wait_for_selector('a.bookTitle, [data-testid="bookTitle"] a, .bookTitle', timeout=300000)
+                                    first_link = await page.query_selector('a.bookTitle, [data-testid="bookTitle"] a, .bookTitle, [data-testid="bookSearchResult"] a')
+                                except:
+                                    print(f"    [Timeout] CAPTCHA not solved in 5 minutes. Falling back to Tier 2...")
+                            if first_link:
+                                book_url = await first_link.evaluate("el => el.href")
+                                print(f"    [Goodreads] Success! Captured fallback result: {book_url}")
                 except Exception as e:
                     print(f"    [Goodreads] Search error: {e}")
                 

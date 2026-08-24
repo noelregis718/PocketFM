@@ -3,104 +3,126 @@ import os
 import sys
 import pandas as pd
 from playwright.async_api import async_playwright
+import csv
 
+# Add current directory to path to import local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from goodreads_scraper import GoodreadsScraper, normalize_title_for_search
-from apply_jra_style import apply_styling
+from goodreads_scraper import GoodreadsScraper
+from scraper import AmazonScraper
 
-if len(sys.argv) > 1:
-    filename = sys.argv[1]
-else:
-    filename = "Next_Agency.xlsx"
-
-EXCEL_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), filename)
 file_lock = asyncio.Lock()
 
-async def safe_save(df):
+async def safe_save_csv(df, csv_path):
     async with file_lock:
         try:
-            df.to_excel(EXCEL_FILE, index=False)
+            # Save without index
+            df.to_csv(csv_path, index=False)
         except Exception as e:
-            print(f"Error saving excel: {e}", flush=True)
+            print(f"Error saving CSV: {e}", flush=True)
 
-async def scrape_author_for_book(index, row, df, context, semaphore):
-    title = str(row.get("Name of Series", "")).strip()
-    current_author = str(row.get("Author Name", "")).strip()
-    
-    # Only process if Author is missing
-    if current_author and current_author.lower() != "nan" and current_author != "":
-        return
-
-    if not title or title.lower() == "nan":
+async def scrape_author_for_row(index, row, df, csv_path, gr_scraper, amz_scraper, context, semaphore):
+    series_name = str(row.get("Book Series Name", "")).strip()
+    if not series_name or series_name.lower() == 'nan':
         return
 
     async with semaphore:
-        print(f"[{index}] Searching Goodreads for missing author of: '{title}'", flush=True)
-        page = await context.new_page()
-        try:
-            clean_title = normalize_title_for_search(title)
-            search_url = f"https://www.goodreads.com/search?q={clean_title.replace(' ', '+')}"
+        print(f"[{index}] Fetching author for series: '{series_name}'", flush=True)
+        
+        # 1. Try Goodreads First
+        print(f"[{index}] Checking Goodreads...", flush=True)
+        # Using a dummy author to reuse existing logic for search
+        gr_data = await gr_scraper.scrape_goodreads_data(context, title=series_name, author="")
+        
+        author_found = None
+        
+        details = None
+        source_used = "None"
+        
+        if gr_data and gr_data.get("Author_Found") and gr_data.get("Author_Found") != "N/A" and gr_data.get("Author_Found") != "Unknown":
+            author_found = gr_data.get("Author_Found")
+            print(f"[{index}] Goodreads SUCCESS: Found author '{author_found}'", flush=True)
             
-            await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
-            await asyncio.sleep(2)
-            
-            # The author name on the search page is inside <a class="authorName">
-            author_el = await page.query_selector('.authorName[itemprop="url"] span[itemprop="name"]')
-            if not author_el:
-                author_el = await page.query_selector('.authorName')
-                
-            if author_el:
-                author_name = (await author_el.inner_text()).strip()
-                if author_name:
-                    print(f"[{index}] Found Author: {author_name} for '{title}'", flush=True)
-                    df.at[index, "Author Name"] = author_name
-                    await safe_save(df)
-                else:
-                    print(f"[{index}] Author element found but empty for '{title}'", flush=True)
-            else:
-                print(f"[{index}] Could not find author for '{title}' in search results.", flush=True)
-                
-        except Exception as e:
-            print(f"[{index}] Error searching '{title}': {e}", flush=True)
-        finally:
-            await page.close()
+        # 2. Try Amazon Fallback if not found
+        if not author_found:
+            print(f"[{index}] Goodreads failed. Falling back to Amazon...", flush=True)
+            amz_data = await amz_scraper.get_book1_details(context, series_name, "")
+            if amz_data and amz_data.get("Author Name") and amz_data.get("Author Name") != "N/A":
+                author_found = amz_data.get("Author Name")
+                print(f"[{index}] Amazon SUCCESS: Found author '{author_found}'", flush=True)
+        
+        # 3. Save if found
+        if author_found:
+            highlighted_name = f"[NEW] {author_found}"
+            df.at[index, "Author Name"] = highlighted_name
+            await safe_save_csv(df, csv_path)
+            print(f"[{index}] Saved {highlighted_name} to CSV.", flush=True)
+        else:
+            print(f"[{index}] FAILED to find author on both platforms.", flush=True)
 
-async def run():
-    print(f"Loading Excel file: {EXCEL_FILE}", flush=True)
-    df = pd.read_excel(EXCEL_FILE)
+
+async def main():
+    csv_path = r"E:\Internship\PocketFM\Romantasy _ Self Publication Master.csv"
     
-    missing_count = sum(df['Author Name'].isna() | (df['Author Name'] == ''))
-    print(f"Found {missing_count} books missing authors.", flush=True)
+    print("Loading CSV file...", flush=True)
+    df = pd.read_csv(csv_path)
     
-    if missing_count == 0:
-        print("No missing authors to scrape!")
+    # Clean up column names in case there are leading/trailing spaces
+    df.columns = df.columns.str.strip()
+    
+    # Ensure Author Name column exists
+    if "Author Name" not in df.columns:
+        print("Error: 'Author Name' column not found in CSV. Existing columns:", df.columns.tolist())
         return
 
-    scraper = GoodreadsScraper(headless=False)
-    semaphore = asyncio.Semaphore(10) # 10 concurrent tabs
+    # Find rows where Author Name is missing AND Book Series Name is present
+    has_series = df['Book Series Name'].notna() & (df['Book Series Name'] != '') & (df['Book Series Name'].astype(str).str.strip() != '') & (df['Book Series Name'].astype(str).str.lower() != 'nan')
+    missing_author = df["Author Name"].isna() | (df["Author Name"] == "") | (df["Author Name"].astype(str).str.strip() == "") | (df['Author Name'].astype(str).str.lower() == 'nan')
+    
+    missing_mask = has_series & missing_author
+    missing_indices = df[missing_mask].index.tolist()
+    
+    if not missing_indices:
+        print("No missing authors found in the dataset with a valid series name.")
+        return
+        
+    # Process all of them
+    target_indices = missing_indices
+    print(f"Found {len(target_indices)} missing authors with valid series names. Starting batch processing...", flush=True)
+    
+    gr_scraper = GoodreadsScraper(headless=False)
+    amz_scraper = AmazonScraper(headless=False)
+    
+    semaphore = asyncio.Semaphore(8)
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context()
-        page = await context.new_page()
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         
-        # Login to avoid search blocks
-        await scraper.login_to_goodreads(page)
-        await page.close()
+        # Login to Goodreads first using an initial page
+        login_page = await context.new_page()
+        logged_in = await gr_scraper.login_to_goodreads(login_page)
+        if not logged_in:
+            print("Warning: Goodreads login failed. Scraping might be limited.", flush=True)
+        await login_page.close()
         
-        print("\nStarting fast Author extraction...", flush=True)
+        # Prepare Amazon location using a temporary page
+        amz_page = await context.new_page()
+        await amz_page.goto("https://www.amazon.com", wait_until="domcontentloaded", timeout=60000)
+        await amz_scraper.set_amazon_location(amz_page, "90016")
+        await amz_page.close()
+        
+        print("\nStarting concurrent scraping...", flush=True)
         tasks = []
-        for index, row in df.iterrows():
-            tasks.append(scrape_author_for_book(index, row, df, context, semaphore))
+        for idx in target_indices:
+            row = df.loc[idx]
+            tasks.append(scrape_author_for_row(idx, row, df, csv_path, gr_scraper, amz_scraper, context, semaphore))
             
         await asyncio.gather(*tasks)
-        await browser.close()
         
-    print("\nAuthor Scraping complete.", flush=True)
-    try:
-        apply_styling(EXCEL_FILE)
-        print("Styling applied.", flush=True)
-    except: pass
+        await browser.close()
+        print("\nScraping complete!", flush=True)
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    asyncio.run(main())

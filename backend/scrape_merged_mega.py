@@ -8,9 +8,9 @@ import json
 from playwright.async_api import async_playwright
 
 EXCEL_FILE = r"E:\Internship\PocketFM\Merged_Romance_Keywords.xlsx"
-START_ROW = 10290
-TARGET_ROWS = 10400
-CONCURRENCY = 5
+START_ROW = 10323
+TARGET_ROWS = 10342
+CONCURRENCY = 2
 BATCH_SIZE = 50
 
 # We use urllib for the Autocomplete API to bypass AWS WAF
@@ -37,8 +37,13 @@ def get_autocomplete_book_url(query):
             time.sleep(1)
     return None
 
+import random
+
 async def process_row(index, row, df, context, sem):
     async with sem:
+        # Add random jitter to prevent blasting Goodreads with simultaneous requests
+        await asyncio.sleep(random.uniform(2.0, 5.0))
+        
         book_name = str(row.get("Book Title", row.get("Series Name", ""))).strip()
         
         # SANITIZE BOOK NAME: Take only the part before a colon to avoid confusing the search
