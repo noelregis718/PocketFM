@@ -30,3 +30,4 @@ keyword_scraper.lock
 backend/gr_creds.json
 .env
 playwright_goodreads_profile/
+downloads/

@@ -1,6 +1,6 @@
 # Romantasy Subgenre Checker: Architecture & Logic Reference
 
-This document outlines the architecture of the **Romantasy Subgenre Checker**, detailing the progression of its categorization engine up through **Version 3** (the current active, fully accepted, and executed logic).
+This document outlines the architecture of the **Romantasy Subgenre Checker**, detailing the progression of its categorization engine up through **Version 4** (the current active AI-powered logic).
 
 ## Core Architecture
 The script processes a dataset of 9,560 scraped books. It categorizes each book into one of 12 highly specific Romantasy subgenres by scanning 5 columns of text and calculating a weighted point score.
@@ -45,6 +45,13 @@ V3 focused on rescuing false-negatives (books that failed due to slight spelling
     *   If matched, the book completely bypasses the Negative Dealbreakers.
     *   It is mathematically guaranteed to output as a **`Strong Match`**, overriding any bad/vague synopsis data.
 
+### Version 4: The AI Ensemble Arbitration (Current State)
+V4 overhauled the architecture by integrating local AI NLP models to arbitrate "Weak Matches" and generate a flawless Binary `Yes`/`No` output.
+
+*   **Translation Layer:** Uses `langdetect` and `deep-translator` to dynamically translate foreign synopses to English.
+*   **KeyBERT Extraction:** Uses deep learning to extract the top 5 hidden themes from a compiled "Super-Paragraph" (Title + Series + Tags + Logline + Synopsis) to check for overlap with Master keywords.
+*   **Zero-Shot NLP Inference:** Uses the Hugging Face `nli-distilroberta-base` neural network to logically deduce if the context implies "Romantic Fantasy" with > 60% confidence.
+
 ---
 
 ## The Categorization Engine (Step-by-Step Logic)
@@ -82,24 +89,27 @@ Once all 12 subgenres have been evaluated, the engine drops any subgenre that sc
 2.  **Confirmed Keyword Count:** If points are tied, the subgenre with the most *Confirmed* keywords wins.
 3.  **Master Keyword Count:** If still tied, the subgenre with the most *Master* keywords wins.
 
-### Step 5: Final Verdict & Thresholds
+### Step 5: Final Verdict & The AI Rescue
 The winning subgenre is evaluated against the confidence threshold (3 points):
-*   **Strong Match:** The book scored `>= 3` points (e.g., just one Confirmed keyword in the synopsis, or one Master keyword in the Title).
-*   **Weak Match:** The book scored exactly `1` or `2` points (e.g., a Master keyword found in the synopsis).
+*   **Strong Match:** The book scored `>= 3` points (e.g., just one Confirmed keyword in the synopsis, or one Master keyword in the Title). It is instantly marked as `Yes`.
+*   **Weak Match:** The book scored exactly `1` or `2` points. This triggers the **AI Ensemble Rescue**:
+    1. The text is translated to English if necessary.
+    2. The text is compiled into a Super-Paragraph.
+    3. `KeyBERT` extracts themes. If 2+ themes match the V3 dictionaries, the book is rescued (`Yes`).
+    4. The Hugging Face `Zero-Shot` model evaluates the text. If confidence > 60%, the book is rescued (`Yes`).
+    5. If both AI layers fail, the book is permanently rejected (`No`).
 
 ### Step 6: The Gold Author Rescue
-If a book scores exactly `0` points across all 12 subgenres, it is normally marked as a generic `Fail`. 
+If a book scores exactly `0` points across all 12 subgenres, it is normally marked as a generic `No`. 
 * However, if the `Author Name` is on the **Gold Standard Authors** list, the engine rescues the book and forces an override. 
-* Since it's guaranteed to be a Romantasy book, it defaults the output to `Strong Match (High Fantasy Court Adventure)` to ensure it is not discarded during publisher filtering.
+* It is guaranteed to be a Romantasy book, so it defaults the output to `Yes`.
 
 ---
 
 ## Output Format
-The script overwrites the `Romantasy Checker` column in the master Excel sheet directly, outputting strings like:
-*   `Strong Match (Gothic Dark Romantasy)`
-*   `Weak Match (Mythology, Legend & Fairy Tale Retelling)`
-*   `Fail (Dealbreaker)`
-*   `Fail`
+The script overwrites the `Romantasy Checker` column in the master Excel sheet directly, outputting a strict binary format:
+*   `Yes`
+*   `No`
 
 ---
 
