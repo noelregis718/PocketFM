@@ -5,8 +5,11 @@ from typing import List, Optional
 class BookDownloadTask:
     title: str
     number: int
+    author: str = ""
     status: str = "pending" # pending, downloaded, converted, failed
+    source: Optional[str] = None # OceanOfPDF, Z-Library
     pdf_path: Optional[str] = None
+    epub_path: Optional[str] = None
     docx_path: Optional[str] = None
     error_message: Optional[str] = None
 

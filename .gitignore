@@ -3,20 +3,6 @@ node_modules/
 dist/
 dist-ssr
 *.local
-
-# Python
-venv/
-__pycache__/
-*.py[cod]
-*$py.class
-*.xlsx
-scraped_data.xlsx
-
-# IDE
-.vscode/
-.idea/
-.DS_Store
-
 # Debug & Scraper State
 \# Goodreads Sign in.txt
 *_debug.html
@@ -31,3 +17,8 @@ backend/gr_creds.json
 .env
 playwright_goodreads_profile/
 downloads/
+
+.env
+
+# Excel sheets
+*.xlsx
