@@ -112,17 +112,35 @@ def download_book_sync(task: BookDownloadTask, download_dir: str):
                     
                 # Click the best matched result
                 target_url = best_link['href']
-                print(f"[OceanOfPDF] [{task.title}] Navigating to {target_url}")
-                page.goto(target_url, wait_until="domcontentloaded")
-                page.wait_for_load_state("domcontentloaded")
                 
+                if search_attempt >= 5:
+                    print(f"[OceanOfPDF] [{task.title}] Attempt {search_attempt+1} >= 6: Opening link in a NEW tab to bypass Cloudflare...")
+                    book_page = context.new_page()
+                    book_page.goto(target_url, wait_until="domcontentloaded")
+                    book_page.wait_for_load_state("domcontentloaded")
+                else:
+                    print(f"[OceanOfPDF] [{task.title}] Navigating to {target_url}")
+                    book_page = page
+                    book_page.goto(target_url, wait_until="domcontentloaded")
+                    book_page.wait_for_load_state("domcontentloaded")
+                
+                # Check for Cloudflare challenge and wait if present
+                for _ in range(15):
+                    content = book_page.content().lower()
+                    if "cloudflare" in content or "security verification" in content or "verify you are human" in content:
+                        print(f"[OceanOfPDF] [{task.title}] Cloudflare challenge detected! Waiting 2 seconds...")
+                        book_page.wait_for_timeout(2000)
+                    else:
+                        break
                 
                 # Find the PDF download form
-                pdf_form = page.locator("form[action*='Fetching_Resource.php']").filter(has=page.locator("input[name='filename'][value$='.pdf']")).first
+                pdf_form = book_page.locator("form[action*='Fetching_Resource.php']").filter(has=book_page.locator("input[name='filename'][value$='.pdf']")).first
                 
                 if pdf_form.count() == 0:
                     if search_attempt < 9:
                         print(f"[OceanOfPDF] [{task.title}] Could not find PDF download form on page. Retrying search...")
+                        if search_attempt >= 5:
+                            book_page.close()
                         continue
                     else:
                         task.status = "failed"
@@ -135,7 +153,7 @@ def download_book_sync(task: BookDownloadTask, download_dir: str):
                 try:
                     # Remove target="_blank" so download happens in this page context
                     pdf_form.evaluate("form => form.removeAttribute('target')")
-                    with page.expect_download(timeout=120000) as download_info:
+                    with book_page.expect_download(timeout=120000) as download_info:
                         pdf_form.evaluate("form => form.submit()")
                             
                     download = download_info.value
@@ -148,15 +166,21 @@ def download_book_sync(task: BookDownloadTask, download_dir: str):
                     task.status = "downloaded"
                     task.source = "OceanOfPDF"
                     print(f"[OceanOfPDF] [{task.title}] Successfully downloaded to {pdf_path}")
+                    if search_attempt >= 5:
+                        book_page.close()
                     break # Success! break out of the 10-attempt loop
                 except Exception as e:
                     if search_attempt < 9:
                         print(f"[OceanOfPDF] [{task.title}] Download attempt failed: {e}. Retrying search...")
+                        if search_attempt >= 5:
+                            book_page.close()
                         continue
                     else:
                         task.status = "failed"
                         task.error_message = f"Failed to trigger or save download: {str(e)}"
                         print(f"[OceanOfPDF] [{task.title}] Download failed: {e}")
+                        if search_attempt >= 5:
+                            book_page.close()
                         break
                     
             browser.close()

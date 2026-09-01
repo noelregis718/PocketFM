@@ -23,7 +23,9 @@ def sanitize_folder_name(name: str) -> str:
 import sys
 
 def run_pipeline(start_row: int, end_row: int):
-    excel_path = "e:\\Internship\\PocketFM\\CT _ US _ Pipeline Master Sheet new.xlsx"
+    import time
+    pipeline_start_time = time.time()
+    excel_path = "e:\\Internship\\PocketFM\\CT _ US _ Pipeline Master Sheet.xlsx"
     downloads_base = "e:\\Internship\\PocketFM\\downloads"
     
     if not os.path.exists(downloads_base):
@@ -144,11 +146,17 @@ def run_pipeline(start_row: int, end_row: int):
         print(f"  - Failed DOCX conversion (PDF/EPUB kept): {failed_count}")
         print(f"  - Failed to download entirely: {download_failed}")
         
+    pipeline_end_time = time.time()
+    total_seconds = int(pipeline_end_time - pipeline_start_time)
+    minutes = total_seconds // 60
+    seconds = total_seconds % 60
+    
     print(f"\n{'='*50}")
     print("PIPELINE RUN COMPLETE")
     print(f"Total rows processed: {end_row - start_row + 1}")
     print(f"Grand Total - OceanOfPDF downloads: {total_ocean_downloaded}")
     print(f"Grand Total - Z-Library downloads:  {total_zlib_downloaded}")
+    print(f"Total Execution Time: {minutes} minutes and {seconds} seconds")
     print(f"{'='*50}\n")
         
 if __name__ == "__main__":
