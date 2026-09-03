@@ -14,18 +14,9 @@ EXCEL_FILE = r"E:\Internship\PocketFM\Amazon A-Z Crawl List.xlsx"
 SHEET_NAME = "Sheet1"
 
 TAXONOMY = [
-    "High Fantasy Court Adventure",
-    "Gothic Dark Romantasy",
-    "Dark Academia Romantasy",
-    "Monster Romance (Non-Shifter)",
-    "Werewolf / Shifter Romance",
-    "High-Stakes Games & Deadly Trials",
-    "Mythology, Legend & Fairy Tale Retelling",
-    "War College / Military Academy",
-    "Korean Romance Fantasy / Isekai",
-    "Paranormal Romance",
-    "Cozy / Cottagecore",
-    "Urban / Contemporary Fantasy Romance"
+    "Fantasy",
+    "Romantasy",
+    "Romance Drama"
 ]
 
 def query_ollama(prompt):
@@ -33,7 +24,10 @@ def query_ollama(prompt):
         "model": MODEL,
         "prompt": prompt,
         "stream": False,
-        "format": "json"
+        "format": "json",
+        "options": {
+            "temperature": 0.0
+        }
     }
     try:
         response = requests.post(OLLAMA_API_URL, json=payload, timeout=300)
@@ -53,10 +47,9 @@ def build_prompt(row):
     prompt = f"""You are an expert book classifier. Classify the following book into exactly one of these taxonomy genres:
 [{taxonomy_str}]
 
-You must respond with ONLY a raw JSON object containing exactly these three keys:
+You must respond with ONLY a raw JSON object containing exactly these two keys:
 "classified_genre": The exact string from the taxonomy list above that best fits the book.
 "reasoning": A 1-2 sentence explanation of why this genre fits based on the book data.
-"confidence_score": An integer between 1 and 100 representing your conviction.
 
 BOOK DATA:
 Title: {row.get('Book Title', '')}
@@ -77,9 +70,9 @@ def process_row(idx, row):
     res = query_ollama(prompt)
     
     if res:
-        return idx, res.get("classified_genre", "Error"), res.get("reasoning", ""), res.get("confidence_score", 0)
+        return idx, res.get("classified_genre", "Error"), res.get("reasoning", "")
     else:
-        return idx, "Error", "Ollama API Failure", 0
+        return idx, "Error", "Ollama API Failure"
 
 def main():
     print(f"Loading {EXCEL_FILE}...")
@@ -94,21 +87,19 @@ def main():
         df["Detailed Genre (AI)"] = ""
     if "AI Reasoning" not in df.columns:
         df["AI Reasoning"] = ""
-    if "AI Confidence" not in df.columns:
-        df["AI Confidence"] = ""
 
     # Find rows to process
     rows_to_process = []
     for idx, row in df.iterrows():
-        # Only process if it hasn't been assigned a valid genre yet
-        if pd.isna(row.get("Detailed Genre (AI)")) or str(row.get("Detailed Genre (AI)", "")).strip() == "":
+        # Only process if it hasn't been assigned a valid genre yet, or if it errored out previously
+        genre_val = str(row.get("Detailed Genre (AI)", "")).strip()
+        if pd.isna(row.get("Detailed Genre (AI)")) or genre_val == "" or genre_val == "Error":
             rows_to_process.append((idx, row))
             
     print(f"Found {len(rows_to_process)} rows to process.")
     
-    # Limit to just 10 rows for testing
-    rows_to_process = rows_to_process[:10]
-    print(f"Limiting to first {len(rows_to_process)} rows for this test run...")
+    rows_to_process = rows_to_process[:500]
+    print(f"Limiting to first {len(rows_to_process)} rows for this run...")
     
     processed_count = 0
     
@@ -117,10 +108,9 @@ def main():
         futures = {executor.submit(process_row, idx, row): idx for idx, row in rows_to_process}
         
         for future in concurrent.futures.as_completed(futures):
-            idx, genre, reasoning, conf = future.result()
+            idx, genre, reasoning = future.result()
             df.at[idx, "Detailed Genre (AI)"] = genre
             df.at[idx, "AI Reasoning"] = reasoning
-            df.at[idx, "AI Confidence"] = conf
             
             processed_count += 1
             if processed_count % SAVE_INTERVAL == 0:
