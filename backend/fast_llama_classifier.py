@@ -98,7 +98,7 @@ def main():
             
     print(f"Found {len(rows_to_process)} rows to process.")
     
-    rows_to_process = rows_to_process[:500]
+    rows_to_process = rows_to_process[:600]
     print(f"Limiting to first {len(rows_to_process)} rows for this run...")
     
     processed_count = 0
